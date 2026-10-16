@@ -1,10 +1,7 @@
 import crypto from "crypto";
 import { AIOperationProposal } from "@/types/ai";
-
-// Persistent server-side secret for operational approval tokens
-const SERVER_SECRET =
-  process.env.PRAXELOPS_SECRET ||
-  "praxelops_internal_secure_hmac_secret_v2_9f82c4e17b84";
+import { getMasterSecret } from "@/lib/security/secret";
+import { OperationPolicyEngine } from "./policy";
 
 export class ApprovalSecurityService {
   /**
@@ -27,7 +24,7 @@ export class ApprovalSecurityService {
     expiresAt: number
   ): string {
     return crypto
-      .createHmac("sha256", SERVER_SECRET)
+      .createHmac("sha256", getMasterSecret())
       .update(`${proposalId}:${serverId}:${commandsHash}:${expiresAt}`)
       .digest("hex");
   }
@@ -61,7 +58,7 @@ export class ApprovalSecurityService {
       };
     }
 
-    // 4. HMAC signature check
+    // 4. HMAC signature check using authoritative secret
     const expectedSig = this.signProposal(
       proposal.id,
       proposal.targetServerId,
@@ -79,13 +76,14 @@ export class ApprovalSecurityService {
   }
 
   /**
-   * Strict command validation against forbidden destructive and malicious patterns
+   * Enforces restrictive operation policy over arbitrary shell strings
    */
   static validateCommandsSafety(commands: string[]): {
     safe: boolean;
     dangerousCommand?: string;
     reason?: string;
   } {
+    // 1. Hard blocklist against destructive patterns
     const forbiddenPatterns = [
       { pattern: /rm\s+-rf\s+(\/|\/\*|~\/|\.\/)/i, reason: "Root or home recursive deletion" },
       { pattern: /mkfs(\.[a-z0-9]+)?\s+/i, reason: "Filesystem creation / disk format" },
@@ -106,6 +104,16 @@ export class ApprovalSecurityService {
             reason: rule.reason,
           };
         }
+      }
+
+      // 2. Policy conformity check
+      const conformity = OperationPolicyEngine.validateCommandConformity(trimmed);
+      if (!conformity.conforming) {
+        return {
+          safe: false,
+          dangerousCommand: trimmed,
+          reason: conformity.reason || "Violates strict operational policy whitelist",
+        };
       }
     }
 

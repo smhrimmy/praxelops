@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
+import { AuthService } from "@/lib/security/auth";
 
 export async function GET(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const serverId = searchParams.get("serverId");
     const limit = parseInt(searchParams.get("limit") || "100", 10);

@@ -1,6 +1,7 @@
 import { Client, ConnectConfig, SFTPWrapper } from "ssh2";
 import { ServerHost } from "@/types/server";
 import { RemoteFileItem } from "@/types/ssh";
+import { KnownHostsService } from "./knownHosts";
 
 export interface ExecResult {
   stdout: string;
@@ -31,6 +32,17 @@ export class SSHAdapter {
       username: server.username,
       readyTimeout: 15000,
       keepaliveInterval: 10000,
+      hostVerifier: (keyBuffer: Buffer) => {
+        const verification = KnownHostsService.verifyHostKey(
+          server.host,
+          server.port,
+          keyBuffer
+        );
+        if (!verification.verified) {
+          throw new Error(verification.error || "Host key verification rejected");
+        }
+        return true;
+      },
     };
 
     if (credentials?.password) {
@@ -43,7 +55,7 @@ export class SSHAdapter {
   }
 
   /**
-   * Execute a remote command via genuine SSH connection
+   * Execute a remote command via genuine SSH connection with host key verification
    */
   static async executeCommand(
     server: ServerHost,
@@ -117,14 +129,13 @@ export class SSHAdapter {
   }
 
   /**
-   * Reads a real remote directory via genuine SFTP session
+   * Reads a real remote directory via genuine SFTP session with host verification
    */
   static async listSFTPDirectory(
     server: ServerHost,
     remotePath: string,
     credentials?: { password?: string; privateKey?: string }
   ): Promise<{ path: string; files: RemoteFileItem[] }> {
-    // Basic path traversal and null byte sanitization
     if (remotePath.includes("\0")) {
       throw new Error("Invalid remote path containing null bytes");
     }
@@ -152,8 +163,6 @@ export class SSHAdapter {
                 const mode = attrs.mode || 0;
                 const isDirectory = (mode & 0o40000) === 0o40000;
                 const isSymlink = (mode & 0o120000) === 0o120000;
-
-                // Format permissions octal
                 const permStr = (mode & 0o777).toString(8);
 
                 return {
@@ -243,7 +252,68 @@ export class SSHAdapter {
   }
 
   /**
-   * Resize active interactive PTY session
+   * Spawns an interactive PTY session with streaming channels
+   */
+  static async createInteractiveSession(
+    sessionId: string,
+    server: ServerHost,
+    options: { rows?: number; cols?: number; term?: string } = {},
+    credentials?: { password?: string; privateKey?: string }
+  ): Promise<{ sessionId: string; serverId: string }> {
+    return new Promise((resolve, reject) => {
+      const conn = new Client();
+
+      conn
+        .on("ready", () => {
+          conn.shell(
+            {
+              term: options.term || "xterm-256color",
+              rows: options.rows || 24,
+              cols: options.cols || 80,
+            },
+            (err, stream) => {
+              if (err) {
+                conn.end();
+                return reject(new Error(`PTY shell allocation failed: ${err.message}`));
+              }
+
+              this.activeSessions.set(sessionId, {
+                sessionId,
+                serverId: server.id,
+                client: conn,
+                stream,
+                createdAt: Date.now(),
+                lastActiveAt: Date.now(),
+              });
+
+              resolve({ sessionId, serverId: server.id });
+            }
+          );
+        })
+        .on("error", (err) => {
+          reject(new Error(`SSH interactive connection failed: ${err.message}`));
+        })
+        .connect(this.getConnectConfig(server, credentials));
+    });
+  }
+
+  /**
+   * Send stdin input chunk to an active session
+   */
+  static sendInput(sessionId: string, data: string): boolean {
+    const session = this.activeSessions.get(sessionId);
+    if (!session || !session.stream) return false;
+    try {
+      session.stream.write(data);
+      session.lastActiveAt = Date.now();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Resize active interactive PTY session window
    */
   static resizeSession(sessionId: string, rows: number, cols: number): boolean {
     const session = this.activeSessions.get(sessionId);
@@ -258,7 +328,7 @@ export class SSHAdapter {
   }
 
   /**
-   * Close active interactive session
+   * Close active interactive session and terminate underlying client
    */
   static closeSession(sessionId: string): void {
     const session = this.activeSessions.get(sessionId);
@@ -269,5 +339,9 @@ export class SSHAdapter {
       } catch {}
       this.activeSessions.delete(sessionId);
     }
+  }
+
+  static getActiveSessionCount(): number {
+    return this.activeSessions.size;
   }
 }

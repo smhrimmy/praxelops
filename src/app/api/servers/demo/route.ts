@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
+import { AuthService } from "@/lib/security/auth";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
     const demoServers = StorageService.loadDemoEnvironment();
     StorageService.logAuditEvent({
-      actor: "operator",
+      actor: auth.operatorId,
       eventType: "server_created",
       targetServerId: demoServers[0].id,
       targetServerName: demoServers[0].name,

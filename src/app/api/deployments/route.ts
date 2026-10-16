@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { DeploymentRunner } from "@/lib/deployments/runner";
+import { AuthService } from "@/lib/security/auth";
 import { TriggerDeploymentSchema, DeploymentWorkflow } from "@/types/deployment";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
     const deployments = StorageService.getDeployments();
     return NextResponse.json({ success: true, data: deployments });
   } catch (error) {
@@ -17,6 +23,16 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
+    const rate = AuthService.checkRateLimit(`client-deploy-${auth.operatorId}`, 20, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const body = await request.json();
 
     if (body.action === "rollback") {
@@ -63,7 +79,6 @@ export async function POST(request: Request) {
 
     StorageService.saveDeployment(newWorkflow);
 
-    // Run workflow asynchronously
     DeploymentRunner.runWorkflow(newWorkflow).catch((err) =>
       console.error("Workflow run error:", err)
     );

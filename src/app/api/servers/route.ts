@@ -1,9 +1,20 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
+import { AuthService } from "@/lib/security/auth";
 import { ServerHostSchema } from "@/types/server";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
+    const rate = AuthService.checkRateLimit("client-servers-get", 120, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const servers = StorageService.getServers();
     return NextResponse.json({ success: true, data: servers });
   } catch (error) {
@@ -16,6 +27,20 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
+    if (!AuthService.checkPayloadSize(request, 65536)) {
+      return NextResponse.json({ success: false, error: "Payload too large" }, { status: 413 });
+    }
+
+    const rate = AuthService.checkRateLimit("client-servers-post", 30, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const body = await request.json();
     const parsed = ServerHostSchema.parse(body);
 
@@ -31,7 +56,7 @@ export async function POST(request: Request) {
     StorageService.saveServer(newServer);
 
     StorageService.logAuditEvent({
-      actor: "operator",
+      actor: auth.operatorId,
       eventType: "server_created",
       targetServerId: newServer.id,
       targetServerName: newServer.name,
@@ -50,6 +75,11 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
     if (!id) {
@@ -63,7 +93,7 @@ export async function DELETE(request: Request) {
     }
 
     StorageService.logAuditEvent({
-      actor: "operator",
+      actor: auth.operatorId,
       eventType: "server_deleted",
       targetServerId: id,
       targetServerName: server?.name,

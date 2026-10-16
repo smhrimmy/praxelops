@@ -2,10 +2,21 @@ import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { SSHAdapter } from "@/lib/ssh/adapter";
 import { ApprovalSecurityService } from "@/lib/ai/approval";
+import { AuthService } from "@/lib/security/auth";
 import { AIApprovalExecutionSchema } from "@/types/ai";
 
 export async function POST(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
+    const rate = AuthService.checkRateLimit(`client-ai-approve-${auth.operatorId}`, 20, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const body = await request.json();
     const parsed = AIApprovalExecutionSchema.parse(body);
 
@@ -20,7 +31,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 2. Fetch proposal from persistent storage
+    // 2. Fetch authoritative proposal from persistent storage
     const proposal = StorageService.getProposalById(parsed.proposalId);
     if (!proposal) {
       return NextResponse.json(
@@ -63,7 +74,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 6. Dangerous command inspection
+    // 6. Restrictive operation policy validation
     const safetyCheck = ApprovalSecurityService.validateCommandsSafety(
       proposal.commands
     );
@@ -90,18 +101,18 @@ export async function POST(request: Request) {
     proposal.status = "executing";
     StorageService.saveProposal(proposal);
 
-    // Log approval audit event
+    // Log approval audit event with secret redaction
     StorageService.logAuditEvent({
-      actor: "operator",
+      actor: auth.operatorId,
       eventType: "ai_proposal_approved",
       targetServerId: server.id,
       targetServerName: server.name,
       status: "success",
-      details: {
+      details: AuthService.redactSecrets({
         proposalId: proposal.id,
         title: proposal.title,
         riskLevel: proposal.riskLevel,
-      },
+      }),
     });
 
     // 9. Execute commands sequentially via SSH

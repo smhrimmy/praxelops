@@ -1,13 +1,24 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { SSHAdapter } from "@/lib/ssh/adapter";
+import { AuthService } from "@/lib/security/auth";
 
 export async function GET(request: Request) {
   try {
+    const auth = AuthService.authenticateRequest(request);
+    if (!auth.authenticated) {
+      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+    }
+
+    const rate = AuthService.checkRateLimit(`client-sftp-${auth.operatorId}`, 100, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
+    }
+
     const { searchParams } = new URL(request.url);
     const serverId = searchParams.get("serverId");
     const remotePath = searchParams.get("path") || "/";
-    const action = searchParams.get("action"); // 'preview' or default 'list'
+    const action = searchParams.get("action");
 
     if (!serverId) {
       return NextResponse.json(
@@ -36,12 +47,11 @@ export async function GET(request: Request) {
       }
     }
 
-    // Genuine SFTP Directory Listing
     try {
       const result = await SSHAdapter.listSFTPDirectory(server, remotePath);
 
       StorageService.logAuditEvent({
-        actor: "operator",
+        actor: auth.operatorId,
         eventType: "sftp_read",
         targetServerId: server.id,
         targetServerName: server.name,
@@ -55,7 +65,7 @@ export async function GET(request: Request) {
       });
     } catch (sftpErr) {
       StorageService.logAuditEvent({
-        actor: "operator",
+        actor: auth.operatorId,
         eventType: "sftp_read",
         targetServerId: server.id,
         targetServerName: server.name,
