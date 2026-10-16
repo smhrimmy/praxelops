@@ -3,17 +3,15 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Terminal as TerminalIcon,
-  Play,
-  RotateCcw,
   Trash2,
   Plus,
   X,
   Server,
   CornerDownLeft,
-  ChevronRight,
-  Maximize2,
   Copy,
   Check,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 
@@ -31,59 +29,92 @@ interface TerminalTab {
 interface TerminalViewProps {
   servers: ServerHost[];
   selectedServer?: ServerHost;
+  onAddServerClick?: () => void;
 }
 
 export const TerminalView: React.FC<TerminalViewProps> = ({
   servers,
   selectedServer,
+  onAddServerClick,
 }) => {
-  const initialServer = selectedServer || servers[0];
+  const initialServer = selectedServer || (servers.length > 0 ? servers[0] : undefined);
 
-  const [tabs, setTabs] = useState<TerminalTab[]>([
-    {
-      id: "tab-1",
-      serverId: initialServer?.id || "srv-local-01",
-      serverName: initialServer?.name || "Localhost Hypervisor",
-      host: initialServer?.host || "127.0.0.1",
-      username: initialServer?.username || "operator",
-      history: [
-        {
-          type: "system",
-          text: `SSH-2.0-OpenSSH_9.6p1 PraxelOps Terminal Multiplexer\nAuthenticated to ${initialServer?.name || "Localhost"} (${initialServer?.host || "127.0.0.1"})\nType 'help' or click quick commands below.`,
-        },
-      ],
-      commandHistory: [],
-      historyIndex: -1,
-    },
-  ]);
+  const [tabs, setTabs] = useState<TerminalTab[]>(
+    initialServer
+      ? [
+          {
+            id: "tab-1",
+            serverId: initialServer.id,
+            serverName: initialServer.name,
+            host: initialServer.host,
+            username: initialServer.username,
+            history: [
+              {
+                type: "system",
+                text: `SSH-2.0-OpenSSH PraxelOps Backend Gateway\nTarget: ${initialServer.username}@${initialServer.host}:${initialServer.port}\nEnter shell commands to execute via genuine SSH backend adapter.`,
+              },
+            ],
+            commandHistory: [],
+            historyIndex: -1,
+          },
+        ]
+      : []
+  );
 
-  const [activeTabId, setActiveTabId] = useState<string>("tab-1");
+  const [activeTabId, setActiveTabId] = useState<string>(tabs[0]?.id || "");
   const [currentInput, setCurrentInput] = useState<string>("");
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+
+  // Sync tabs when selectedServer changes
+  useEffect(() => {
+    if (selectedServer) {
+      const existing = tabs.find((t) => t.serverId === selectedServer.id);
+      if (existing) {
+        setActiveTabId(existing.id);
+      } else {
+        const newTabId = `tab-${Date.now()}`;
+        setTabs((prev) => [
+          ...prev,
+          {
+            id: newTabId,
+            serverId: selectedServer.id,
+            serverName: selectedServer.name,
+            host: selectedServer.host,
+            username: selectedServer.username,
+            history: [
+              {
+                type: "system",
+                text: `SSH-2.0-OpenSSH PraxelOps Gateway\nConnected to ${selectedServer.name} (${selectedServer.host}:${selectedServer.port})\nEnter commands below.`,
+              },
+            ],
+            commandHistory: [],
+            historyIndex: -1,
+          },
+        ]);
+        setActiveTabId(newTabId);
+      }
+    }
+  }, [selectedServer]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll on output
   useEffect(() => {
     terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeTab?.history]);
 
-  // Focus input on tab switch
   useEffect(() => {
     inputRef.current?.focus();
   }, [activeTabId]);
 
-  // Quick preset commands
   const quickCommands = [
     { label: "Sys Info", cmd: "uname -a" },
     { label: "Uptime", cmd: "uptime" },
     { label: "Disk Space", cmd: "df -h" },
     { label: "Memory", cmd: "free -m" },
-    { label: "Containers", cmd: "docker ps" },
-    { label: "Service Health", cmd: "systemctl status sshd" },
+    { label: "Processes", cmd: "ps aux --sort=-%cpu | head -n 6" },
   ];
 
   const handleExecute = async (commandToRun?: string) => {
@@ -93,7 +124,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     setCurrentInput("");
     setIsExecuting(true);
 
-    // Append user input to history
     setTabs((prevTabs) =>
       prevTabs.map((tab) => {
         if (tab.id === activeTab.id) {
@@ -119,27 +149,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         return;
       }
 
-      if (cmd.toLowerCase() === "help") {
-        setTabs((prevTabs) =>
-          prevTabs.map((tab) =>
-            tab.id === activeTab.id
-              ? {
-                  ...tab,
-                  history: [
-                    ...tab.history,
-                    {
-                      type: "system",
-                      text: "PraxelOps Interactive SSH Shell:\n- Run any standard Linux command (e.g. uname, df, free, docker ps, htop)\n- Use 'clear' to wipe terminal output\n- Use quick action chips for instant health inspection",
-                    },
-                  ],
-                }
-              : tab
-          )
-        );
-        setIsExecuting(false);
-        return;
-      }
-
       const res = await fetch("/api/ssh/exec", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -154,7 +163,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         throw new Error(data.error || "Execution failed");
       }
 
-      const output = data.data.stdout || data.data.stderr || "(No output returned)";
+      const stdout = data.data.stdout;
+      const stderr = data.data.stderr;
       const isErr = data.data.code !== 0;
 
       setTabs((prevTabs) =>
@@ -166,7 +176,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                 ...tab.history,
                 {
                   type: isErr ? "error" : "output",
-                  text: output,
+                  text: stdout || stderr || `[Command finished with exit code ${data.data.code}]`,
                 },
               ],
             };
@@ -182,7 +192,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
               ...tab,
               history: [
                 ...tab.history,
-                { type: "error", text: `Error: ${(err as Error).message}` },
+                { type: "error", text: `SSH Error: ${(err as Error).message}` },
               ],
             };
           }
@@ -245,7 +255,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       history: [
         {
           type: "system",
-          text: `SSH-2.0-OpenSSH_9.6p1 PraxelOps Terminal Multiplexer\nConnected to ${server.name} (${server.host})\nReady for interactive input.`,
+          text: `SSH-2.0-OpenSSH PraxelOps Gateway\nConnected to ${server.name} (${server.host})\nReady for interactive input.`,
         },
       ],
       commandHistory: [],
@@ -257,30 +267,37 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
   const closeTab = (tabId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (tabs.length === 1) return; // Keep at least one tab
     const nextTabs = tabs.filter((t) => t.id !== tabId);
     setTabs(nextTabs);
-    if (activeTabId === tabId) {
+    if (activeTabId === tabId && nextTabs.length > 0) {
       setActiveTabId(nextTabs[0].id);
     }
   };
 
-  const copyTerminalOutput = () => {
-    if (!activeTab) return;
-    const text = activeTab.history
-      .map((h) => (h.type === "input" ? `$ ${h.text}` : h.text))
-      .join("\n");
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const clearActiveTab = () => {
-    if (!activeTab) return;
-    setTabs((prev) =>
-      prev.map((t) => (t.id === activeTab.id ? { ...t, history: [] } : t))
+  if (servers.length === 0 || tabs.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 bg-neutral-950 text-neutral-100">
+        <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+          <TerminalIcon className="w-6 h-6" />
+        </div>
+        <div className="max-w-md space-y-1">
+          <h2 className="text-sm font-semibold">No Active SSH Terminals</h2>
+          <p className="text-xs text-neutral-400 leading-relaxed">
+            Register a server host in the Fleet inventory to launch genuine interactive SSH shell sessions.
+          </p>
+        </div>
+        {onAddServerClick && (
+          <button
+            onClick={onAddServerClick}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-sm transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Server Host</span>
+          </button>
+        )}
+      </div>
     );
-  };
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950 text-neutral-100 select-text">
@@ -295,7 +312,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                 onClick={() => setActiveTabId(tab.id)}
                 className={`flex items-center space-x-2 px-3 py-1.5 rounded-t-lg text-xs font-medium cursor-pointer transition ${
                   isActive
-                    ? "bg-neutral-950 text-white border-t-2 border-blue-500 shadow-sm"
+                    ? "bg-neutral-950 text-white border-t-2 border-emerald-500 shadow-sm"
                     : "text-neutral-400 hover:text-white hover:bg-neutral-800"
                 }`}
               >
@@ -316,7 +333,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
         {/* Tab Actions */}
         <div className="flex items-center space-x-1.5">
-          {/* Quick new tab dropdown */}
           <div className="relative group">
             <button
               title="Open Session to Another Server"
@@ -342,8 +358,16 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           </div>
 
           <button
-            onClick={copyTerminalOutput}
-            title="Copy Terminal Output"
+            onClick={() => {
+              if (!activeTab) return;
+              const text = activeTab.history
+                .map((h) => (h.type === "input" ? `$ ${h.text}` : h.text))
+                .join("\n");
+              navigator.clipboard.writeText(text);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            }}
+            title="Copy Output"
             className="p-1.5 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
           >
             {copied ? (
@@ -354,8 +378,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           </button>
 
           <button
-            onClick={clearActiveTab}
-            title="Clear Screen (Ctrl+L)"
+            onClick={() => {
+              if (!activeTab) return;
+              setTabs((prev) =>
+                prev.map((t) => (t.id === activeTab.id ? { ...t, history: [] } : t))
+              );
+            }}
+            title="Clear Screen"
             className="p-1.5 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -363,7 +392,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         </div>
       </div>
 
-      {/* Quick Command Chips */}
+      {/* Quick Presets */}
       <div className="px-3 py-1.5 bg-neutral-900/60 border-b border-white/5 flex items-center space-x-2 overflow-x-auto shrink-0 select-none">
         <span className="text-[10px] font-mono uppercase text-neutral-500 shrink-0">
           Presets:
@@ -407,9 +436,10 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
             return (
               <div
                 key={i}
-                className="text-rose-400 bg-rose-500/10 p-2 rounded border border-rose-500/20 whitespace-pre-wrap"
+                className="text-rose-400 bg-rose-500/10 p-2.5 rounded border border-rose-500/20 whitespace-pre-wrap flex items-start space-x-2"
               >
-                {h.text}
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{h.text}</span>
               </div>
             );
           }
@@ -426,7 +456,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         {isExecuting && (
           <div className="flex items-center space-x-2 text-blue-400 animate-pulse">
             <span className="w-2 h-2 rounded-full bg-blue-500" />
-            <span className="text-xs">Executing remote command...</span>
+            <span className="text-xs">Dispatching command via SSH adapter...</span>
           </div>
         )}
 
@@ -449,7 +479,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           placeholder={
             isExecuting
               ? "Running command..."
-              : "Enter shell command (e.g. htop, ls -la, ping, docker)..."
+              : "Enter shell command (e.g. uname -a, df -h, docker ps)..."
           }
           className="flex-1 bg-transparent border-none text-xs font-mono text-white placeholder-neutral-600 focus:outline-none"
         />

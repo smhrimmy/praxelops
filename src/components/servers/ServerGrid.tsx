@@ -6,16 +6,14 @@ import {
   Terminal,
   FolderTree,
   Bot,
-  Activity,
   HardDrive,
   Cpu,
   Layers,
   Clock,
   Trash2,
-  CheckCircle2,
-  AlertTriangle,
-  XCircle,
   Plus,
+  AlertCircle,
+  FlaskConical,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 
@@ -25,6 +23,7 @@ interface ServerGridProps {
   onOpenSFTP: (server: ServerHost) => void;
   onDiagnose: (server: ServerHost) => void;
   onAddServer: () => void;
+  onLoadDemoEnvironment?: () => void;
   onDeleteServer?: (serverId: string) => void;
 }
 
@@ -34,12 +33,12 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
   onOpenSFTP,
   onDiagnose,
   onAddServer,
+  onLoadDemoEnvironment,
   onDeleteServer,
 }) => {
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Extract all unique tags
   const allTags = Array.from(
     new Set(servers.flatMap((s) => s.tags || []))
   );
@@ -55,7 +54,7 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
   });
 
   const formatUptime = (seconds?: number) => {
-    if (!seconds) return "Unknown";
+    if (!seconds || seconds === 0) return "Not available";
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
     if (days > 0) return `${days}d ${hours}h`;
@@ -67,11 +66,14 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
       {/* Top Controls: Header, Tag Filter & Search */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
-            Infrastructure Fleet
+          <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center space-x-2">
+            <span>Infrastructure Fleet</span>
+            <span className="text-xs font-mono font-normal px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-neutral-500">
+              {servers.length} configured
+            </span>
           </h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-            Real-time monitoring, SSH terminal access, and AI diagnostics across {servers.length} managed nodes.
+            Real SSH endpoints, authentic system metrics, and grounded operational playbooks.
           </p>
         </div>
 
@@ -95,46 +97,81 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
       </div>
 
       {/* Filter Tabs */}
-      <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 shrink-0">
-        <button
-          onClick={() => setSelectedTag("all")}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
-            selectedTag === "all"
-              ? "bg-blue-600 text-white"
-              : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
-          }`}
-        >
-          All Nodes ({servers.length})
-        </button>
-        {allTags.map((tag) => (
+      {servers.length > 0 && (
+        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 shrink-0">
           <button
-            key={tag}
-            onClick={() => setSelectedTag(tag)}
+            onClick={() => setSelectedTag("all")}
             className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
-              selectedTag === tag
+              selectedTag === "all"
                 ? "bg-blue-600 text-white"
                 : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
             }`}
           >
-            #{tag}
+            All Nodes ({servers.length})
           </button>
-        ))}
-      </div>
+          {allTags.map((tag) => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTag(tag)}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                selectedTag === tag
+                  ? "bg-blue-600 text-white"
+                  : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white"
+              }`}
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {/* Server Cards Grid */}
+      {/* Server Cards Grid / Empty State */}
       <div className="flex-1 overflow-y-auto pr-1">
-        {filteredServers.length === 0 ? (
+        {servers.length === 0 ? (
+          <div className="h-full min-h-[300px] flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/10 dark:border-white/10 p-8 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+              <Server className="w-6 h-6" />
+            </div>
+            <div className="max-w-md space-y-1">
+              <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                No Infrastructure Nodes Registered
+              </h2>
+              <p className="text-xs text-neutral-500 leading-relaxed">
+                Connect your first Linux or macOS server using standard SSH credentials. Real CPU, memory, and disk telemetry will be polled directly from the host.
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
+              <button
+                onClick={onAddServer}
+                className="flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-sm transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Register Server Host</span>
+              </button>
+
+              {onLoadDemoEnvironment && (
+                <button
+                  onClick={onLoadDemoEnvironment}
+                  className="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs font-mono text-neutral-600 dark:text-neutral-400 transition"
+                  title="Loads a sandbox environment explicitly marked as [DEMO]"
+                >
+                  <FlaskConical className="w-3.5 h-3.5" />
+                  <span>Load [DEMO] Sandbox</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : filteredServers.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/10 dark:border-white/10 text-neutral-400">
             <Server className="w-8 h-8 mb-2 opacity-50" />
-            <p className="text-xs">No server nodes match the current filter.</p>
+            <p className="text-xs">No server nodes match the current filter &quot;{searchQuery}&quot;.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-6">
             {filteredServers.map((server) => {
               const m = server.metrics;
-              const cpuPct = m?.cpuPercent ?? 0;
-              const memPct = m?.memoryPercent ?? 0;
-              const diskPct = m?.diskPercent ?? 0;
+              const hasMetrics = m && m.reportedAt && !m.isStale;
+              const isDemo = server.tags.includes("demo") || server.name.startsWith("[DEMO]");
 
               return (
                 <div
@@ -152,7 +189,7 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                                 ? "bg-emerald-500 animate-pulse"
                                 : server.status === "degraded"
                                 ? "bg-amber-500 animate-pulse"
-                                : "bg-rose-500"
+                                : "bg-neutral-400"
                             }`}
                           />
                           <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 truncate">
@@ -174,17 +211,23 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         )}
-                        <span
-                          className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${
-                            server.status === "online"
-                              ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-                              : server.status === "degraded"
-                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
-                              : "bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20"
-                          }`}
-                        >
-                          {server.status}
-                        </span>
+                        {isDemo ? (
+                          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 font-bold">
+                            DEMO
+                          </span>
+                        ) : (
+                          <span
+                            className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${
+                              server.status === "online"
+                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                                : server.status === "degraded"
+                                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                                : "bg-neutral-500/10 text-neutral-600 dark:text-neutral-400 border border-neutral-500/20"
+                            }`}
+                          >
+                            {server.status}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -202,83 +245,90 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                       </div>
                     )}
 
-                    {/* Metrics Gauges */}
-                    <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-black/5 dark:border-white/10">
-                      {/* CPU */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
-                            <Cpu className="w-3 h-3" />
-                            <span>CPU</span>
-                          </span>
-                          <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
-                            {cpuPct.toFixed(1)}%
-                          </span>
+                    {/* Metrics Gauges or Honest Unpolled State */}
+                    {hasMetrics ? (
+                      <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-black/5 dark:border-white/10">
+                        {/* CPU */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
+                              <Cpu className="w-3 h-3" />
+                              <span>CPU</span>
+                            </span>
+                            <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                              {m.cpuPercent.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                m.cpuPercent > 85
+                                  ? "bg-rose-500"
+                                  : m.cpuPercent > 60
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{ width: `${Math.min(m.cpuPercent, 100)}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all duration-300 ${
-                              cpuPct > 85
-                                ? "bg-rose-500"
-                                : cpuPct > 60
-                                ? "bg-amber-500"
-                                : "bg-emerald-500"
-                            }`}
-                            style={{ width: `${Math.min(cpuPct, 100)}%` }}
-                          />
-                        </div>
-                      </div>
 
-                      {/* Memory */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
-                            <Layers className="w-3 h-3" />
-                            <span>RAM</span>
-                          </span>
-                          <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
-                            {memPct.toFixed(1)}%
-                          </span>
+                        {/* Memory */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
+                              <Layers className="w-3 h-3" />
+                              <span>RAM</span>
+                            </span>
+                            <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                              {m.memoryPercent.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                m.memoryPercent > 85
+                                  ? "bg-rose-500"
+                                  : m.memoryPercent > 60
+                                  ? "bg-amber-500"
+                                  : "bg-blue-500"
+                              }`}
+                              style={{ width: `${Math.min(m.memoryPercent, 100)}%` }}
+                            />
+                          </div>
                         </div>
-                        <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all duration-300 ${
-                              memPct > 85
-                                ? "bg-rose-500"
-                                : memPct > 60
-                                ? "bg-amber-500"
-                                : "bg-blue-500"
-                            }`}
-                            style={{ width: `${Math.min(memPct, 100)}%` }}
-                          />
-                        </div>
-                      </div>
 
-                      {/* Disk */}
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
-                            <HardDrive className="w-3 h-3" />
-                            <span>Disk</span>
-                          </span>
-                          <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
-                            {diskPct.toFixed(0)}%
-                          </span>
-                        </div>
-                        <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full transition-all duration-300 ${
-                              diskPct > 85
-                                ? "bg-rose-500"
-                                : diskPct > 60
-                                ? "bg-amber-500"
-                                : "bg-purple-500"
-                            }`}
-                            style={{ width: `${Math.min(diskPct, 100)}%` }}
-                          />
+                        {/* Disk */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="text-neutral-500 dark:text-neutral-400 flex items-center space-x-1">
+                              <HardDrive className="w-3 h-3" />
+                              <span>Disk</span>
+                            </span>
+                            <span className="font-mono font-medium text-neutral-800 dark:text-neutral-200">
+                              {m.diskPercent.toFixed(0)}%
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-neutral-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                m.diskPercent > 85
+                                  ? "bg-rose-500"
+                                  : m.diskPercent > 60
+                                  ? "bg-amber-500"
+                                  : "bg-purple-500"
+                              }`}
+                              style={{ width: `${Math.min(m.diskPercent, 100)}%` }}
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/10 flex items-center space-x-2 text-xs text-neutral-500 bg-black/5 dark:bg-white/5 p-2.5 rounded-lg">
+                        <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+                        <span>Telemetry unpolled. Connect via SSH to collect live metrics.</span>
+                      </div>
+                    )}
 
                     {/* Metadata Footer */}
                     <div className="flex items-center justify-between text-[10px] text-neutral-400 mt-3 font-mono">

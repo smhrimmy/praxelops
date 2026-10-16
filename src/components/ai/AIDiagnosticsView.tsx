@@ -8,13 +8,11 @@ import {
   ShieldCheck,
   CheckCircle2,
   RefreshCw,
-  Terminal,
-  Server,
   Zap,
   Lock,
   X,
   Play,
-  RotateCcw,
+  Plus,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 import {
@@ -26,14 +24,16 @@ import {
 interface AIDiagnosticsViewProps {
   servers: ServerHost[];
   selectedServer?: ServerHost;
+  onAddServerClick?: () => void;
 }
 
 export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
   servers,
   selectedServer,
+  onAddServerClick,
 }) => {
-  const [currentServer, setCurrentServer] = useState<ServerHost>(
-    selectedServer || servers[0]
+  const [currentServer, setCurrentServer] = useState<ServerHost | undefined>(
+    selectedServer || (servers.length > 0 ? servers[0] : undefined)
   );
   const [report, setReport] = useState<ServerDiagnosticReport | null>(null);
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -41,11 +41,13 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
     useState<AIOperationProposal | null>(null);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [executionResult, setExecutionResult] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
   const runDiagnostics = async (srv: ServerHost) => {
     setIsScanning(true);
     setReport(null);
     setExecutionResult(null);
+    setErrorBanner(null);
 
     try {
       const res = await fetch("/api/ai/diagnose", {
@@ -56,9 +58,11 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
       const data = await res.json();
       if (data.success) {
         setReport(data.data);
+      } else {
+        setErrorBanner(data.error || "Diagnostic analysis failed");
       }
-    } catch {
-      // Error handling
+    } catch (err) {
+      setErrorBanner(`Network error: ${(err as Error).message}`);
     } finally {
       setIsScanning(false);
     }
@@ -77,15 +81,14 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
         body: JSON.stringify({
           proposalId: selectedProposal.id,
           targetServerId: selectedProposal.targetServerId,
+          approvalToken: selectedProposal.approvalToken,
           confirmedByUser: true,
-          clientToken: `token-${Date.now()}-${Math.random().toString(36).substring(2, 12)}`,
         }),
       });
 
       const data = await res.json();
       if (data.success) {
         setExecutionResult(data.data.output);
-        // Update proposal status in state
         if (report) {
           setReport({
             ...report,
@@ -97,7 +100,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
           });
         }
       } else {
-        setExecutionResult(`Error: ${data.error}`);
+        setExecutionResult(`Authorization or execution error: ${data.error}`);
       }
     } catch (err) {
       setExecutionResult(`Network Failure: ${(err as Error).message}`);
@@ -135,6 +138,33 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
     }
   };
 
+  if (servers.length === 0 || !currentServer) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-purple-500/10 flex items-center justify-center text-purple-400">
+          <Bot className="w-6 h-6" />
+        </div>
+        <div className="max-w-md space-y-1">
+          <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            No Servers Available for Diagnostics
+          </h2>
+          <p className="text-xs text-neutral-500 leading-relaxed">
+            Register a server host in Fleet to scan telemetry metrics, detect bottlenecks, and generate safe remedial playbooks.
+          </p>
+        </div>
+        {onAddServerClick && (
+          <button
+            onClick={onAddServerClick}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-sm transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Server Host</span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden p-6 space-y-5">
       {/* Header */}
@@ -145,7 +175,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
             <span>AI Operations Copilot</span>
           </h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-            Grounded infrastructure diagnostics, anomaly detection, and human-in-the-loop operational playbooks.
+            Grounded telemetry diagnostics, anomaly detection, and human-in-the-loop operational playbooks.
           </p>
         </div>
 
@@ -157,6 +187,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
               if (s) {
                 setCurrentServer(s);
                 setReport(null);
+                setErrorBanner(null);
               }
             }}
             className="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs font-medium text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -174,10 +205,17 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
             className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium shadow-sm transition shrink-0 disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? "animate-spin" : ""}`} />
-            <span>{isScanning ? "Scanning Node..." : "Run Diagnostics"}</span>
+            <span>{isScanning ? "Analyzing..." : "Run Diagnostics"}</span>
           </button>
         </div>
       </div>
+
+      {errorBanner && (
+        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center space-x-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{errorBanner}</span>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto space-y-4 pr-1">
@@ -185,7 +223,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
           <div className="h-72 flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/10 dark:border-white/10 text-neutral-400 p-6 text-center">
             <Bot className="w-10 h-10 mb-3 text-purple-400/50" />
             <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">
-              Ready to Analyze {currentServer.name}
+              Ready to Inspect {currentServer.name}
             </h3>
             <p className="text-xs max-w-sm mt-1 text-neutral-500">
               Click &quot;Run Diagnostics&quot; to inspect real system telemetry, active services, memory pressures, and generate remedial playbooks.
@@ -197,14 +235,14 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
           <div className="h-72 flex flex-col items-center justify-center space-y-3">
             <div className="w-8 h-8 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
             <p className="text-xs font-mono text-neutral-500">
-              Scanning system metrics, kernel journals and process states on {currentServer.host}...
+              Evaluating telemetry and service status on {currentServer.host}...
             </p>
           </div>
         )}
 
         {report && (
           <div className="space-y-4">
-            {/* Health Score & Summary Banner */}
+            {/* Health Score Banner */}
             <div className="macos-card rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="space-y-1">
                 <div className="flex items-center space-x-2">
@@ -275,63 +313,65 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
             )}
 
             {/* Operational Proposals */}
-            <div className="space-y-2 pt-2">
-              <h3 className="text-xs font-semibold uppercase font-mono text-neutral-500 dark:text-neutral-400 px-1">
-                Remedial Operation Proposals ({report.proposals.length})
-              </h3>
+            {report.proposals.length > 0 && (
+              <div className="space-y-2 pt-2">
+                <h3 className="text-xs font-semibold uppercase font-mono text-neutral-500 dark:text-neutral-400 px-1">
+                  Remedial Operation Proposals ({report.proposals.length})
+                </h3>
 
-              <div className="space-y-3">
-                {report.proposals.map((prop) => (
-                  <div
-                    key={prop.id}
-                    className="macos-card rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
-                  >
-                    <div className="space-y-1.5 max-w-2xl">
-                      <div className="flex items-center space-x-2">
-                        {getRiskBadge(prop.riskLevel)}
-                        {prop.requiresSudo && (
-                          <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/10 text-purple-600 dark:text-purple-400">
-                            <Lock className="w-2.5 h-2.5" />
-                            <span>Requires Sudo</span>
+                <div className="space-y-3">
+                  {report.proposals.map((prop) => (
+                    <div
+                      key={prop.id}
+                      className="macos-card rounded-xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-1.5 max-w-2xl">
+                        <div className="flex items-center space-x-2">
+                          {getRiskBadge(prop.riskLevel)}
+                          {prop.requiresSudo && (
+                            <span className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                              <Lock className="w-2.5 h-2.5" />
+                              <span>Requires Sudo</span>
+                            </span>
+                          )}
+                          <h4 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                            {prop.title}
+                          </h4>
+                        </div>
+
+                        <p className="text-xs text-neutral-600 dark:text-neutral-300">
+                          {prop.rationale}
+                        </p>
+
+                        <div className="flex items-center space-x-2 font-mono text-[11px] text-neutral-400">
+                          <span>Expected: {prop.expectedOutcome}</span>
+                        </div>
+                      </div>
+
+                      <div className="shrink-0 flex items-center space-x-2">
+                        {prop.status === "executed" ? (
+                          <span className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Executed</span>
                           </span>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setSelectedProposal(prop);
+                              setExecutionResult(null);
+                            }}
+                            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition shadow-sm"
+                          >
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>Review & Authorize</span>
+                          </button>
                         )}
-                        <h4 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
-                          {prop.title}
-                        </h4>
-                      </div>
-
-                      <p className="text-xs text-neutral-600 dark:text-neutral-300">
-                        {prop.rationale}
-                      </p>
-
-                      <div className="flex items-center space-x-2 font-mono text-[11px] text-neutral-400">
-                        <span>Expected: {prop.expectedOutcome}</span>
                       </div>
                     </div>
-
-                    <div className="shrink-0 flex items-center space-x-2">
-                      {prop.status === "executed" ? (
-                        <span className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Executed</span>
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setSelectedProposal(prop);
-                            setExecutionResult(null);
-                          }}
-                          className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition shadow-sm"
-                        >
-                          <Zap className="w-3.5 h-3.5" />
-                          <span>Review & Authorize</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
@@ -340,7 +380,6 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
       {selectedProposal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-150">
           <div className="w-full max-w-xl bg-white dark:bg-neutral-900 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-            {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-black/5 dark:border-white/10">
               <div className="flex items-center space-x-2">
                 <ShieldAlert className="w-5 h-5 text-amber-500" />
@@ -359,7 +398,6 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
               </button>
             </div>
 
-            {/* Modal Body */}
             <div className="p-5 space-y-4 overflow-y-auto">
               <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs">
                 <strong>Safety Governance Invariant:</strong> AI recommendations
@@ -385,7 +423,6 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
                 </p>
               </div>
 
-              {/* Proposed Shell Commands */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] font-mono uppercase text-neutral-400">
@@ -414,7 +451,6 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
                 </div>
               )}
 
-              {/* Real-time Output Feedback */}
               {executionResult && (
                 <div>
                   <span className="text-[10px] font-mono uppercase text-neutral-400">
@@ -427,7 +463,6 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
               )}
             </div>
 
-            {/* Footer Actions */}
             <div className="p-4 bg-neutral-50 dark:bg-neutral-950/40 border-t border-black/5 dark:border-white/10 flex items-center justify-end space-x-2">
               <button
                 type="button"

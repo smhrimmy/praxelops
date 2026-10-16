@@ -39,6 +39,38 @@ export default function PraxelOpsStudioPage() {
     }
   };
 
+  const handleLoadDemo = async () => {
+    try {
+      const res = await fetch("/api/servers/demo", { method: "POST" });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setServers(data.data);
+        setSelectedServer(data.data[0]);
+      }
+    } catch {
+      // Error
+    }
+  };
+
+  const handleDeleteServer = async (serverId: string) => {
+    if (!confirm("Are you sure you want to remove this host from inventory?")) return;
+    try {
+      const res = await fetch(`/api/servers?id=${serverId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        const next = servers.filter((s) => s.id !== serverId);
+        setServers(next);
+        if (selectedServer?.id === serverId) {
+          setSelectedServer(next[0]);
+        }
+      }
+    } catch {
+      // Fallback local filter
+      const next = servers.filter((s) => s.id !== serverId);
+      setServers(next);
+    }
+  };
+
   useEffect(() => {
     loadServers();
   }, []);
@@ -86,7 +118,6 @@ export default function PraxelOpsStudioPage() {
         >
           {/* macOS Window Title Bar */}
           <div className="h-10 px-4 bg-white/40 dark:bg-black/30 border-b border-black/5 dark:border-white/10 flex items-center justify-between shrink-0">
-            {/* Traffic Lights */}
             <TrafficLights
               onClose={() => setActiveView("fleet")}
               onMinimize={() => setIsMaximized(false)}
@@ -94,30 +125,26 @@ export default function PraxelOpsStudioPage() {
               isMaximized={isMaximized}
             />
 
-            {/* Window Center Title */}
             <div className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 tracking-tight flex items-center space-x-1.5">
               <span>PraxelOps Studio</span>
               <span className="text-neutral-400">—</span>
               <span className="text-neutral-500 capitalize">{activeView}</span>
             </div>
 
-            {/* Window Right Dummy Spacer */}
             <div className="w-12" />
           </div>
 
           {/* Window Body: Sidebar + Main Workspace */}
           <div className="flex-1 flex overflow-hidden">
-            {/* Sidebar Navigation */}
             <Sidebar
               activeView={activeView}
               onSelectView={(v) => setActiveView(v)}
               serverCount={servers.length}
-              openTerminalsCount={1}
-              pendingApprovalsCount={1}
+              openTerminalsCount={servers.length > 0 ? 1 : 0}
+              pendingApprovalsCount={0}
               onAddServerClick={() => setIsAddServerOpen(true)}
             />
 
-            {/* Active Content Viewport */}
             <section className="flex-1 flex flex-col overflow-hidden bg-white/40 dark:bg-black/20">
               {activeView === "fleet" && (
                 <ServerGrid
@@ -135,6 +162,8 @@ export default function PraxelOpsStudioPage() {
                     setActiveView("ai-ops");
                   }}
                   onAddServer={() => setIsAddServerOpen(true)}
+                  onLoadDemoEnvironment={handleLoadDemo}
+                  onDeleteServer={handleDeleteServer}
                 />
               )}
 
@@ -142,6 +171,7 @@ export default function PraxelOpsStudioPage() {
                 <TerminalView
                   servers={servers}
                   selectedServer={selectedServer}
+                  onAddServerClick={() => setIsAddServerOpen(true)}
                 />
               )}
 
@@ -149,6 +179,7 @@ export default function PraxelOpsStudioPage() {
                 <SFTPView
                   servers={servers}
                   selectedServer={selectedServer}
+                  onAddServerClick={() => setIsAddServerOpen(true)}
                 />
               )}
 
@@ -156,11 +187,15 @@ export default function PraxelOpsStudioPage() {
                 <AIDiagnosticsView
                   servers={servers}
                   selectedServer={selectedServer}
+                  onAddServerClick={() => setIsAddServerOpen(true)}
                 />
               )}
 
               {activeView === "deployments" && (
-                <DeploymentsView servers={servers} />
+                <DeploymentsView
+                  servers={servers}
+                  onAddServerClick={() => setIsAddServerOpen(true)}
+                />
               )}
 
               {activeView === "audit" && <AuditView />}

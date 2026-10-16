@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
-import { RemoteFileItem } from "@/types/ssh";
+import { SSHAdapter } from "@/lib/ssh/adapter";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const serverId = searchParams.get("serverId");
-    const remotePath = searchParams.get("path") || "/var/www";
+    const remotePath = searchParams.get("path") || "/";
+    const action = searchParams.get("action"); // 'preview' or default 'list'
 
     if (!serverId) {
       return NextResponse.json(
@@ -18,108 +19,58 @@ export async function GET(request: Request) {
     const server = StorageService.getServerById(serverId);
     if (!server) {
       return NextResponse.json(
-        { success: false, error: "Server host not found" },
+        { success: false, error: "Server host not found in inventory" },
         { status: 404 }
       );
     }
 
-    // Produce structured file listing for remote paths
-    const mockFiles: RemoteFileItem[] = [
-      {
-        name: "..",
-        path: remotePath.split("/").slice(0, -1).join("/") || "/",
-        size: 4096,
-        isDirectory: true,
-        isSymlink: false,
-        permissions: "drwxr-xr-x",
-        modifyTime: Date.now() - 3600000,
-        owner: "root",
-        group: "root",
-      },
-      {
-        name: "nginx.conf",
-        path: `${remotePath}/nginx.conf`,
-        size: 2840,
-        isDirectory: false,
-        isSymlink: false,
-        permissions: "-rw-r--r--",
-        modifyTime: Date.now() - 7200000,
-        owner: "root",
-        group: "root",
-      },
-      {
-        name: "docker-compose.yml",
-        path: `${remotePath}/docker-compose.yml`,
-        size: 1420,
-        isDirectory: false,
-        isSymlink: false,
-        permissions: "-rw-r--r--",
-        modifyTime: Date.now() - 14400000,
-        owner: "operator",
-        group: "operator",
-      },
-      {
-        name: ".env.production",
-        path: `${remotePath}/.env.production`,
-        size: 512,
-        isDirectory: false,
-        isSymlink: false,
-        permissions: "-rw-------",
-        modifyTime: Date.now() - 86400000,
-        owner: "operator",
-        group: "operator",
-      },
-      {
-        name: "logs",
-        path: `${remotePath}/logs`,
-        size: 4096,
-        isDirectory: true,
-        isSymlink: false,
-        permissions: "drwxr-xr-x",
-        modifyTime: Date.now() - 1800000,
-        owner: "operator",
-        group: "operator",
-      },
-      {
-        name: "backup-2026-10-15.tar.gz",
-        path: `${remotePath}/backup-2026-10-15.tar.gz`,
-        size: 148576000,
-        isDirectory: false,
-        isSymlink: false,
-        permissions: "-rw-r--r--",
-        modifyTime: Date.now() - 172800000,
-        owner: "operator",
-        group: "operator",
-      },
-      {
-        name: "app",
-        path: `${remotePath}/app`,
-        size: 4096,
-        isDirectory: true,
-        isSymlink: false,
-        permissions: "drwxr-xr-x",
-        modifyTime: Date.now() - 600000,
-        owner: "operator",
-        group: "operator",
-      },
-    ];
+    if (action === "preview") {
+      try {
+        const content = await SSHAdapter.readSFTPFile(server, remotePath);
+        return NextResponse.json({ success: true, data: { content, path: remotePath } });
+      } catch (previewErr) {
+        return NextResponse.json(
+          { success: false, error: (previewErr as Error).message },
+          { status: 422 }
+        );
+      }
+    }
 
-    StorageService.logAuditEvent({
-      actor: "operator",
-      eventType: "sftp_read",
-      targetServerId: server.id,
-      targetServerName: server.name,
-      status: "success",
-      details: { path: remotePath, count: mockFiles.length },
-    });
+    // Genuine SFTP Directory Listing
+    try {
+      const result = await SSHAdapter.listSFTPDirectory(server, remotePath);
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        path: remotePath,
-        files: mockFiles,
-      },
-    });
+      StorageService.logAuditEvent({
+        actor: "operator",
+        eventType: "sftp_read",
+        targetServerId: server.id,
+        targetServerName: server.name,
+        status: "success",
+        details: { path: remotePath, count: result.files.length },
+      });
+
+      return NextResponse.json({
+        success: true,
+        data: result,
+      });
+    } catch (sftpErr) {
+      StorageService.logAuditEvent({
+        actor: "operator",
+        eventType: "sftp_read",
+        targetServerId: server.id,
+        targetServerName: server.name,
+        status: "failure",
+        details: { path: remotePath, error: (sftpErr as Error).message },
+      });
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: (sftpErr as Error).message,
+        },
+        { status: 502 }
+      );
+    }
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },

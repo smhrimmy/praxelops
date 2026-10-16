@@ -47,3 +47,34 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export async function DELETE(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+    if (!id) {
+      return NextResponse.json({ success: false, error: "Server ID is required" }, { status: 400 });
+    }
+
+    const server = StorageService.getServerById(id);
+    const removed = StorageService.deleteServer(id);
+    if (!removed) {
+      return NextResponse.json({ success: false, error: "Server not found" }, { status: 404 });
+    }
+
+    StorageService.logAuditEvent({
+      actor: "operator",
+      eventType: "server_deleted",
+      targetServerId: id,
+      targetServerName: server?.name,
+      status: "success",
+    });
+
+    return NextResponse.json({ success: true, data: { id } });
+  } catch (error) {
+    return NextResponse.json(
+      { success: false, error: (error as Error).message },
+      { status: 500 }
+    );
+  }
+}

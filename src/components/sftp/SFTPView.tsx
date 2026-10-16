@@ -8,13 +8,11 @@ import {
   FileCode,
   FileArchive,
   Download,
-  Upload,
   RefreshCw,
   Eye,
-  Server,
-  ArrowUp,
   X,
-  Check,
+  AlertCircle,
+  Plus,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 import { RemoteFileItem } from "@/types/ssh";
@@ -22,22 +20,26 @@ import { RemoteFileItem } from "@/types/ssh";
 interface SFTPViewProps {
   servers: ServerHost[];
   selectedServer?: ServerHost;
+  onAddServerClick?: () => void;
 }
 
 export const SFTPView: React.FC<SFTPViewProps> = ({
   servers,
   selectedServer,
+  onAddServerClick,
 }) => {
-  const [currentServer, setCurrentServer] = useState<ServerHost>(
-    selectedServer || servers[0]
+  const [currentServer, setCurrentServer] = useState<ServerHost | undefined>(
+    selectedServer || (servers.length > 0 ? servers[0] : undefined)
   );
-  const [currentPath, setCurrentPath] = useState<string>("/var/www");
+  const [currentPath, setCurrentPath] = useState<string>("/");
   const [files, setFiles] = useState<RemoteFileItem[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<{ name: string; content: string } | null>(null);
 
   const fetchFiles = async (path: string, srv: ServerHost) => {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(
         `/api/sftp?serverId=${srv.id}&path=${encodeURIComponent(path)}`
@@ -46,13 +48,25 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
       if (data.success) {
         setFiles(data.data.files);
         setCurrentPath(data.data.path);
+      } else {
+        setFiles([]);
+        setError(data.error || "Failed to list remote directory.");
       }
-    } catch {
-      // Keep previous list on error
+    } catch (err) {
+      setFiles([]);
+      setError(`Network error: ${(err as Error).message}`);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (selectedServer) {
+      setCurrentServer(selectedServer);
+    } else if (!currentServer && servers.length > 0) {
+      setCurrentServer(servers[0]);
+    }
+  }, [selectedServer, servers]);
 
   useEffect(() => {
     if (currentServer) {
@@ -61,7 +75,9 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
   }, [currentServer]);
 
   const handleNavigate = (path: string) => {
-    fetchFiles(path, currentServer);
+    if (currentServer) {
+      fetchFiles(path, currentServer);
+    }
   };
 
   const formatFileSize = (bytes: number) => {
@@ -76,33 +92,70 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
     if (file.isDirectory) {
       return <Folder className="w-4 h-4 text-amber-500 fill-amber-500/20" />;
     }
-    if (file.name.endsWith(".tar.gz") || file.name.endsWith(".zip")) {
+    if (file.name.endsWith(".tar.gz") || file.name.endsWith(".zip") || file.name.endsWith(".gz")) {
       return <FileArchive className="w-4 h-4 text-purple-400" />;
     }
     if (
       file.name.endsWith(".yml") ||
       file.name.endsWith(".yaml") ||
       file.name.endsWith(".json") ||
-      file.name.endsWith(".conf")
+      file.name.endsWith(".conf") ||
+      file.name.endsWith(".sh")
     ) {
       return <FileCode className="w-4 h-4 text-blue-400" />;
     }
     return <FileText className="w-4 h-4 text-neutral-400" />;
   };
 
-  const handlePreview = (file: RemoteFileItem) => {
-    let sampleContent = "";
-    if (file.name === "nginx.conf") {
-      sampleContent = `server {\n    listen 80;\n    server_name praxelops.internal;\n\n    location / {\n        proxy_pass http://127.0.0.1:3000;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n    }\n}`;
-    } else if (file.name === "docker-compose.yml") {
-      sampleContent = `version: '3.8'\nservices:\n  web:\n    image: node:24-alpine\n    restart: unless-stopped\n    ports:\n      - "3000:3000"\n    environment:\n      NODE_ENV: production\n  redis:\n    image: redis:7.2-alpine\n    ports:\n      - "6379:6379"`;
-    } else if (file.name === ".env.production") {
-      sampleContent = `PORT=3000\nNODE_ENV=production\nDATABASE_URL=postgres://operator:secret@127.0.0.1:5432/praxel\nREDIS_HOST=127.0.0.1`;
-    } else {
-      sampleContent = `[Binary or text data for ${file.name}]\nSize: ${formatFileSize(file.size)}\nPermissions: ${file.permissions}`;
+  const handlePreview = async (file: RemoteFileItem) => {
+    if (!currentServer) return;
+    try {
+      const res = await fetch(
+        `/api/sftp?action=preview&serverId=${currentServer.id}&path=${encodeURIComponent(file.path)}`
+      );
+      const data = await res.json();
+      if (data.success) {
+        setPreviewFile({ name: file.name, content: data.data.content });
+      } else {
+        setPreviewFile({
+          name: file.name,
+          content: `Unable to preview file: ${data.error}`,
+        });
+      }
+    } catch (err) {
+      setPreviewFile({
+        name: file.name,
+        content: `Error reading file: ${(err as Error).message}`,
+      });
     }
-    setPreviewFile({ name: file.name, content: sampleContent });
   };
+
+  if (servers.length === 0 || !currentServer) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
+        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+          <FolderTree className="w-6 h-6" />
+        </div>
+        <div className="max-w-md space-y-1">
+          <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+            No Active SFTP Session
+          </h2>
+          <p className="text-xs text-neutral-500 leading-relaxed">
+            Register a server host in Fleet to explore remote filesystems, inspect logs, and transfer files via genuine SFTP.
+          </p>
+        </div>
+        {onAddServerClick && (
+          <button
+            onClick={onAddServerClick}
+            className="flex items-center space-x-1.5 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-sm transition"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Server Host</span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden p-6 space-y-4">
@@ -114,7 +167,7 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
             <span>Remote SFTP Explorer</span>
           </h1>
           <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-            Secure remote file management, file transfers, and in-place configuration inspection.
+            Real SFTP directory exploration on {currentServer.name} ({currentServer.host}).
           </p>
         </div>
 
@@ -165,74 +218,84 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
         </div>
       </div>
 
+      {/* Error Banner */}
+      {error && (
+        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       {/* File List Table */}
       <div className="flex-1 overflow-y-auto rounded-xl border border-black/5 dark:border-white/10 bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/10 text-neutral-500 dark:text-neutral-400 font-medium select-none sticky top-0">
-            <tr>
-              <th className="py-2.5 px-4">Name</th>
-              <th className="py-2.5 px-4">Size</th>
-              <th className="py-2.5 px-4 hidden sm:table-cell">Permissions</th>
-              <th className="py-2.5 px-4 hidden md:table-cell">Modified</th>
-              <th className="py-2.5 px-4 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
-            {files.map((file, idx) => (
-              <tr
-                key={idx}
-                className="hover:bg-black/5 dark:hover:bg-white/5 transition"
-              >
-                <td className="py-2 px-4">
-                  <div
-                    onClick={() => {
-                      if (file.isDirectory) handleNavigate(file.path);
-                    }}
-                    className={`flex items-center space-x-2.5 ${
-                      file.isDirectory
-                        ? "cursor-pointer text-blue-600 dark:text-blue-400 font-semibold"
-                        : "text-neutral-800 dark:text-neutral-200"
-                    }`}
-                  >
-                    {getFileIcon(file)}
-                    <span className="truncate">{file.name}</span>
-                  </div>
-                </td>
-                <td className="py-2 px-4 text-neutral-500">
-                  {file.isDirectory ? "—" : formatFileSize(file.size)}
-                </td>
-                <td className="py-2 px-4 text-neutral-500 hidden sm:table-cell">
-                  {file.permissions}
-                </td>
-                <td className="py-2 px-4 text-neutral-500 hidden md:table-cell">
-                  {new Date(file.modifyTime).toLocaleString()}
-                </td>
-                <td className="py-2 px-4 text-right">
-                  {!file.isDirectory && (
-                    <div className="flex items-center justify-end space-x-1.5">
-                      <button
-                        onClick={() => handlePreview(file)}
-                        title="Preview File Content"
-                        className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => {
-                          alert(`Downloading ${file.name} over SFTP stream`);
-                        }}
-                        title="Download file"
-                        className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </td>
+        {loading ? (
+          <div className="h-48 flex items-center justify-center space-x-2 text-xs text-neutral-400">
+            <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
+            <span>Listing remote directory via SFTP...</span>
+          </div>
+        ) : files.length === 0 ? (
+          <div className="h-48 flex flex-col items-center justify-center text-xs text-neutral-400">
+            <p>Directory is empty or inaccessible.</p>
+          </div>
+        ) : (
+          <table className="w-full text-left text-xs">
+            <thead className="bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/10 text-neutral-500 dark:text-neutral-400 font-medium select-none sticky top-0">
+              <tr>
+                <th className="py-2.5 px-4">Name</th>
+                <th className="py-2.5 px-4">Size</th>
+                <th className="py-2.5 px-4 hidden sm:table-cell">Permissions</th>
+                <th className="py-2.5 px-4 hidden md:table-cell">Modified</th>
+                <th className="py-2.5 px-4 text-right">Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+              {files.map((file, idx) => (
+                <tr
+                  key={idx}
+                  className="hover:bg-black/5 dark:hover:bg-white/5 transition"
+                >
+                  <td className="py-2 px-4">
+                    <div
+                      onClick={() => {
+                        if (file.isDirectory) handleNavigate(file.path);
+                      }}
+                      className={`flex items-center space-x-2.5 ${
+                        file.isDirectory
+                          ? "cursor-pointer text-blue-600 dark:text-blue-400 font-semibold"
+                          : "text-neutral-800 dark:text-neutral-200"
+                      }`}
+                    >
+                      {getFileIcon(file)}
+                      <span className="truncate">{file.name}</span>
+                    </div>
+                  </td>
+                  <td className="py-2 px-4 text-neutral-500">
+                    {file.isDirectory ? "—" : formatFileSize(file.size)}
+                  </td>
+                  <td className="py-2 px-4 text-neutral-500 hidden sm:table-cell">
+                    {file.permissions}
+                  </td>
+                  <td className="py-2 px-4 text-neutral-500 hidden md:table-cell">
+                    {file.modifyTime ? new Date(file.modifyTime).toLocaleString() : "—"}
+                  </td>
+                  <td className="py-2 px-4 text-right">
+                    {!file.isDirectory && (
+                      <div className="flex items-center justify-end space-x-1.5">
+                        <button
+                          onClick={() => handlePreview(file)}
+                          title="Preview File Content"
+                          className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* File Preview Modal */}

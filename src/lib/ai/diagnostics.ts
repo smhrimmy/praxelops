@@ -1,19 +1,85 @@
+import crypto from "crypto";
 import { ServerHost } from "@/types/server";
 import { ServerDiagnosticReport, AIOperationProposal } from "@/types/ai";
+import { ApprovalSecurityService } from "./approval";
 
 export class AIDiagnosticsEngine {
   /**
-   * Generates grounded diagnostic reports and operational proposals from server evidence
+   * Generates grounded diagnostic reports and signed operational proposals from actual server telemetry
    */
   static analyzeServer(server: ServerHost): ServerDiagnosticReport {
     const metrics = server.metrics;
     const anomalies: ServerDiagnosticReport["anomalies"] = [];
     const proposals: AIOperationProposal[] = [];
 
+    // If server has no metrics reported yet, return honest unpolled status
+    if (!metrics) {
+      return {
+        id: `diag-${server.id}-${Date.now()}`,
+        serverId: server.id,
+        serverName: server.name,
+        timestamp: new Date().toISOString(),
+        healthScore: 50,
+        summary: `No live telemetry available for ${server.name}. Establish an SSH connection to gather genuine resource metrics.`,
+        anomalies: [
+          {
+            category: "service",
+            severity: "warning",
+            detail: "Telemetry collector has not yet captured metrics from this host.",
+          },
+        ],
+        proposals: [],
+      };
+    }
+
     let healthScore = 100;
 
+    // Helper to construct cryptographically signed proposals
+    const createProposal = (
+      idSuffix: string,
+      title: string,
+      rationale: string,
+      riskLevel: AIOperationProposal["riskLevel"],
+      commands: string[],
+      requiresSudo: boolean,
+      expectedOutcome: string,
+      rollbackPlan?: string,
+      isDestructive: boolean = false
+    ): AIOperationProposal => {
+      const id = `prop-${idSuffix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+      const commandsHash = ApprovalSecurityService.hashCommands(commands);
+      const expiresAt = Date.now() + 15 * 60 * 1000; // 15 min window
+      const signature = ApprovalSecurityService.signProposal(
+        id,
+        server.id,
+        commandsHash,
+        expiresAt
+      );
+      const approvalToken = crypto.randomBytes(24).toString("hex");
+
+      return {
+        id,
+        targetServerId: server.id,
+        targetServerName: server.name,
+        title,
+        rationale,
+        riskLevel,
+        commands,
+        commandsHash,
+        requiresSudo,
+        rollbackPlan,
+        expectedOutcome,
+        isDestructive,
+        status: "pending_approval",
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        signature,
+        approvalToken,
+      };
+    };
+
     // 1. CPU Analysis
-    if (metrics && metrics.cpuPercent > 85) {
+    if (metrics.cpuPercent > 85) {
       healthScore -= 25;
       anomalies.push({
         category: "cpu",
@@ -22,25 +88,22 @@ export class AIDiagnosticsEngine {
         metricValue: `${metrics.cpuPercent}%`,
       });
 
-      proposals.push({
-        id: `prop-cpu-${Date.now()}`,
-        targetServerId: server.id,
-        targetServerName: server.name,
-        title: "Throttle rogue runaway processes and optimize worker pool",
-        rationale: `CPU load exceeds 85% threshold. Identify top CPU-consuming process and reload configuration.`,
-        riskLevel: "medium",
-        commands: [
-          "ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head -n 6",
-          "systemctl reload-or-restart nginx || true",
-        ],
-        requiresSudo: true,
-        rollbackPlan: "systemctl restart nginx",
-        expectedOutcome: "Lowers CPU usage below 50% and clears stuck worker sockets.",
-        isDestructive: false,
-        status: "pending_approval",
-        createdAt: new Date().toISOString(),
-      });
-    } else if (metrics && metrics.cpuPercent > 60) {
+      proposals.push(
+        createProposal(
+          "cpu",
+          "Throttle runaway processes and inspect top consumers",
+          "CPU load exceeds 85% threshold. Identify top CPU-consuming process and reload worker configuration.",
+          "medium",
+          [
+            "ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head -n 6",
+            "systemctl reload-or-restart nginx || true",
+          ],
+          true,
+          "Lowers CPU usage below 50% and clears stuck worker sockets.",
+          "systemctl restart nginx"
+        )
+      );
+    } else if (metrics.cpuPercent > 60) {
       healthScore -= 10;
       anomalies.push({
         category: "cpu",
@@ -51,40 +114,35 @@ export class AIDiagnosticsEngine {
     }
 
     // 2. Memory Analysis
-    if (metrics && metrics.memoryPercent > 85) {
+    if (metrics.memoryPercent > 85) {
       healthScore -= 30;
       anomalies.push({
         category: "memory",
         severity: "critical",
-        detail: `High RAM exhaustion (${metrics.memoryPercent}% used, only ${(
-          metrics.memoryTotalGB - metrics.memoryUsedGB
-        ).toFixed(1)}GB free). Risk of Linux OOM killer invocation.`,
+        detail: `High RAM exhaustion (${metrics.memoryPercent}% used). Risk of Linux OOM killer invocation.`,
         metricValue: `${metrics.memoryPercent}%`,
       });
 
-      proposals.push({
-        id: `prop-mem-${Date.now()}`,
-        targetServerId: server.id,
-        targetServerName: server.name,
-        title: "Flush OS page caches and recycle idle workers",
-        rationale: "Mitigate immediate OOM pressure before vital database or API processes are killed.",
-        riskLevel: "high",
-        commands: [
-          "sync",
-          "echo 3 > /proc/sys/vm/drop_caches",
-          "systemctl restart redis-server || true",
-        ],
-        requiresSudo: true,
-        rollbackPlan: "Re-enable standard cache memory allocation.",
-        expectedOutcome: "Recovers 15-30% buffer/cache memory immediately.",
-        isDestructive: false,
-        status: "pending_approval",
-        createdAt: new Date().toISOString(),
-      });
+      proposals.push(
+        createProposal(
+          "mem",
+          "Flush OS page caches and recycle idle workers",
+          "Mitigate immediate OOM pressure before vital database or API processes are killed.",
+          "high",
+          [
+            "sync",
+            "echo 3 > /proc/sys/vm/drop_caches",
+            "systemctl restart redis-server || true",
+          ],
+          true,
+          "Recovers 15-30% buffer/cache memory immediately.",
+          "Re-enable standard cache memory allocation."
+        )
+      );
     }
 
     // 3. Disk Analysis
-    if (metrics && metrics.diskPercent > 85) {
+    if (metrics.diskPercent > 85) {
       healthScore -= 30;
       anomalies.push({
         category: "disk",
@@ -93,43 +151,37 @@ export class AIDiagnosticsEngine {
         metricValue: `${metrics.diskPercent}%`,
       });
 
-      proposals.push({
-        id: `prop-disk-${Date.now()}`,
-        targetServerId: server.id,
-        targetServerName: server.name,
-        title: "Clean rotated systemd journals and old docker layers",
-        rationale: "Frees several gigabytes of inactive journal logs and dangling container images.",
-        riskLevel: "medium",
-        commands: [
-          "journalctl --vacuum-time=3d",
-          "docker system prune -f --filter 'until=48h' || true",
-        ],
-        requiresSudo: true,
-        rollbackPlan: "Logs older than 3 days will remain purged.",
-        expectedOutcome: "Restores disk free margin above 25%.",
-        isDestructive: false,
-        status: "pending_approval",
-        createdAt: new Date().toISOString(),
-      });
+      proposals.push(
+        createProposal(
+          "disk",
+          "Clean rotated systemd journals and old container layers",
+          "Frees several gigabytes of inactive journal logs and dangling container images.",
+          "medium",
+          [
+            "journalctl --vacuum-time=3d",
+            "docker system prune -f --filter 'until=48h' || true",
+          ],
+          true,
+          "Restores disk free margin above 25%.",
+          "Logs older than 3 days will remain purged."
+        )
+      );
     }
 
     // 4. Default healthy summary if no critical threshold exceeded
     if (anomalies.length === 0) {
-      proposals.push({
-        id: `prop-opt-${Date.now()}`,
-        targetServerId: server.id,
-        targetServerName: server.name,
-        title: "Routine kernel security patch check and cache check",
-        rationale: "Node is healthy. Verify pending apt/dnf security updates.",
-        riskLevel: "low",
-        commands: ["apt-get update --dry-run || dnf check-update || true"],
-        requiresSudo: false,
-        rollbackPlan: "No system state modified.",
-        expectedOutcome: "Identifies whether reboot or package upgrades are pending.",
-        isDestructive: false,
-        status: "pending_approval",
-        createdAt: new Date().toISOString(),
-      });
+      proposals.push(
+        createProposal(
+          "opt",
+          "Routine kernel security patch check and cache check",
+          "Node is healthy. Verify pending apt/dnf security updates.",
+          "low",
+          ["apt-get update --dry-run || dnf check-update || true"],
+          false,
+          "Identifies whether reboot or package upgrades are pending.",
+          "No system state modified."
+        )
+      );
     }
 
     const report: ServerDiagnosticReport = {

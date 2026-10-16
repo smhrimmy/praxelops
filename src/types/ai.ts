@@ -10,12 +10,16 @@ export interface AIOperationProposal {
   rationale: string;
   riskLevel: RiskLevel;
   commands: string[];
+  commandsHash: string;
   requiresSudo: boolean;
   rollbackPlan?: string;
   expectedOutcome: string;
   isDestructive: boolean;
   status: "pending_approval" | "approved" | "rejected" | "executing" | "executed" | "failed";
   createdAt: string;
+  expiresAt: number; // Unix timestamp
+  signature: string; // HMAC binding
+  approvalToken?: string; // One-time token provided to client
   approvedAt?: string;
   executedAt?: string;
   executionOutput?: string;
@@ -45,8 +49,9 @@ export const AIAnalysisRequestSchema = z.object({
 });
 
 export const AIApprovalExecutionSchema = z.object({
-  proposalId: z.string(),
-  targetServerId: z.string(),
+  proposalId: z.string().min(1),
+  targetServerId: z.string().min(1),
+  approvalToken: z.string().min(16),
   confirmedByUser: z.boolean(),
-  clientToken: z.string().min(16),
+  bypassConfirmation: z.boolean().optional(),
 });

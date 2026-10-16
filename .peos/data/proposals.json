@@ -1,18 +1,1 @@
-[
-  {
-    "id": "prop-test-01",
-    "targetServerId": "srv-local-01",
-    "targetServerName": "Localhost Hypervisor",
-    "title": "Rotate syslog journal",
-    "rationale": "Disk usage exceeded warning threshold",
-    "riskLevel": "medium",
-    "commands": [
-      "journalctl --vacuum-time=2d"
-    ],
-    "requiresSudo": true,
-    "expectedOutcome": "Frees disk space",
-    "isDestructive": false,
-    "status": "pending_approval",
-    "createdAt": "2026-10-16T15:58:47.294Z"
-  }
-]
+[]

@@ -17,7 +17,19 @@ describe("AIDiagnosticsEngine", () => {
     updatedAt: new Date().toISOString(),
   };
 
-  it("detects critical CPU bottleneck and generates remedial proposal", () => {
+  it("handles unpolled servers honestly without fabricating data", () => {
+    const unpolledServer: ServerHost = {
+      ...baseServer,
+      metrics: undefined,
+    };
+
+    const report = AIDiagnosticsEngine.analyzeServer(unpolledServer);
+    expect(report.summary).toContain("No live telemetry available");
+    expect(report.anomalies[0].detail).toContain("not yet captured");
+    expect(report.proposals.length).toBe(0);
+  });
+
+  it("detects critical CPU bottleneck and generates signed remedial proposal", () => {
     const highCpuServer: ServerHost = {
       ...baseServer,
       metrics: {
@@ -46,6 +58,8 @@ describe("AIDiagnosticsEngine", () => {
     expect(cpuProp?.riskLevel).toBe("medium");
     expect(cpuProp?.status).toBe("pending_approval");
     expect(cpuProp?.requiresSudo).toBe(true);
+    expect(cpuProp?.signature).toBeDefined();
+    expect(cpuProp?.approvalToken).toBeDefined();
   });
 
   it("detects high memory exhaustion with high risk rating", () => {
@@ -74,7 +88,7 @@ describe("AIDiagnosticsEngine", () => {
     expect(memProp?.riskLevel).toBe("high");
   });
 
-  it("produces low-risk proposal for healthy servers", () => {
+  it("produces signed low-risk proposal for healthy servers", () => {
     const healthyServer: ServerHost = {
       ...baseServer,
       metrics: {
@@ -98,5 +112,6 @@ describe("AIDiagnosticsEngine", () => {
     expect(report.healthScore).toBe(100);
     expect(report.anomalies.length).toBe(0);
     expect(report.proposals[0].riskLevel).toBe("low");
+    expect(report.proposals[0].signature).toBeDefined();
   });
 });

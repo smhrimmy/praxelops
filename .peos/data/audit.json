@@ -1,5 +1,14 @@
 [
   {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-test-real-01",
+    "targetServerName": "Test Cluster Node",
+    "status": "success",
+    "id": "audit-1792167425171-958c0",
+    "timestamp": "2026-10-16T16:17:05.171Z"
+  },
+  {
     "actor": "test-user",
     "eventType": "ssh_connect",
     "targetServerId": "srv-local-01",
