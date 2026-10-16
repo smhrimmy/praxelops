@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { SSHAdapter } from "@/lib/ssh/adapter";
 import { AuthService } from "@/lib/security/auth";
 import { StorageService } from "@/lib/storage";
+import { TicketService } from "@/lib/security/ticket";
 
 export interface TerminalGatewayConfig {
   port?: number;
@@ -13,10 +14,12 @@ export interface TerminalGatewayConfig {
   maxMessageBytes?: number;
   maxBufferedAmount?: number;
   idleTimeoutMs?: number;
+  allowedOrigins?: string[];
 }
 
 export interface ClientInboundMessage {
   type: "auth" | "input" | "resize" | "ping" | "close";
+  ticket?: string;
   token?: string;
   serverId?: string;
   data?: string;
@@ -41,6 +44,7 @@ export class TerminalGateway {
   private isExternalServer: boolean;
   private sessions = new Map<string, GatewaySessionMeta>();
   private reaperTimer: NodeJS.Timeout | null = null;
+  private allowedOrigins: string[];
 
   public readonly port: number;
   public readonly maxSessions: number;
@@ -54,6 +58,7 @@ export class TerminalGateway {
     this.maxMessageBytes = config.maxMessageBytes || 65536; // 64 KB
     this.maxBufferedAmount = config.maxBufferedAmount || 1048576; // 1 MB backpressure limit
     this.idleTimeoutMs = config.idleTimeoutMs || 900000; // 15 minutes
+    this.allowedOrigins = config.allowedOrigins || [];
 
     if (config.server) {
       this.server = config.server;
@@ -76,13 +81,68 @@ export class TerminalGateway {
     this.startReaper();
   }
 
+  private isValidOrigin(originHeader?: string): boolean {
+    if (!originHeader) {
+      return true;
+    }
+
+    try {
+      const originUrl = new URL(originHeader);
+      const originHost = originUrl.hostname.toLowerCase();
+
+      // Safe loopback hosts
+      if (originHost === "localhost" || originHost === "127.0.0.1" || originHost === "::1") {
+        return true;
+      }
+
+      // Check configured allowlist
+      if (this.allowedOrigins.length > 0) {
+        if (this.allowedOrigins.some(o => o.toLowerCase() === originUrl.origin.toLowerCase() || o.toLowerCase() === originHost)) {
+          return true;
+        }
+      }
+
+      // Check environment allowed origins
+      const envOrigins = process.env.ALLOWED_ORIGINS || process.env.NEXT_PUBLIC_APP_URL || "";
+      const allowedList = envOrigins
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+
+      for (const allowed of allowedList) {
+        try {
+          const allowedUrl = new URL(allowed);
+          if (allowedUrl.origin.toLowerCase() === originUrl.origin.toLowerCase()) {
+            return true;
+          }
+        } catch {
+          if (allowed === originHost || allowed === originHeader.toLowerCase()) {
+            return true;
+          }
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   private setupHttpUpgrade(): void {
     this.server.on("upgrade", (req, socket, head) => {
-      // Basic URL path check
+      // 1. Path check
       const reqUrl = req.url || "";
       const pathname = reqUrl.split("?")[0];
       if (pathname !== "/terminal" && pathname !== "/" && pathname !== "/ssh") {
         socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
+      // 2. Validate Origin (Cross-Origin WebSocket Hijacking CSWSH prevention)
+      const origin = req.headers.origin;
+      if (origin && !this.isValidOrigin(origin)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }
@@ -98,22 +158,31 @@ export class TerminalGateway {
       let activeSessionId: string | null = null;
       let authenticatedOperator: string | null = null;
 
-      // Extract credentials and params from URL query or headers
-      const fullUrl = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+      // Extract parameters from URL query
+      const fullUrl = new URL(req.url || "", `http://${req.headers.host || "127.0.0.1"}`);
+      const queryTicket = fullUrl.searchParams.get("ticket");
       const queryToken = fullUrl.searchParams.get("token");
       const queryServerId = fullUrl.searchParams.get("serverId");
       const authHeader = req.headers.authorization?.replace(/^Bearer\s+/i, "") ||
         (req.headers["x-operator-token"] as string | undefined);
 
+      const initialTicket = queryTicket;
       const initialToken = queryToken || authHeader;
       const initialServerId = queryServerId;
       const initialCols = parseInt(fullUrl.searchParams.get("cols") || "80", 10);
       const initialRows = parseInt(fullUrl.searchParams.get("rows") || "24", 10);
       const initialTerm = fullUrl.searchParams.get("term") || "xterm-256color";
 
-      // If token and serverId provided on upgrade query, connect immediately
-      if (initialToken && initialServerId) {
-        this.handleInitialConnection(ws, initialToken, initialServerId, initialCols, initialRows, initialTerm)
+      // Connect immediately if ticket is provided, or if dev/test credentials are provided
+      if (initialTicket || (initialToken && initialServerId)) {
+        this.handleInitialConnection(ws, {
+          ticket: initialTicket || undefined,
+          token: initialToken || undefined,
+          serverId: initialServerId || undefined,
+          cols: initialCols,
+          rows: initialRows,
+          term: initialTerm,
+        })
           .then((meta) => {
             if (meta) {
               activeSessionId = meta.sessionId;
@@ -154,20 +223,20 @@ export class TerminalGateway {
               this.sendSafeError(ws, "Session already authenticated and initialized");
               return;
             }
-            if (!msg.token || !msg.serverId) {
-              this.sendSafeError(ws, "Auth message requires 'token' and 'serverId'");
+            if (!msg.ticket && (!msg.token || !msg.serverId)) {
+              this.sendSafeError(ws, "Auth message requires 'ticket' or 'token' and 'serverId'");
               ws.close(1008, "Missing auth credentials");
               return;
             }
 
-            const meta = await this.handleInitialConnection(
-              ws,
-              msg.token,
-              msg.serverId,
-              msg.cols || 80,
-              msg.rows || 24,
-              msg.term || "xterm-256color"
-            );
+            const meta = await this.handleInitialConnection(ws, {
+              ticket: msg.ticket,
+              token: msg.token,
+              serverId: msg.serverId,
+              cols: msg.cols || 80,
+              rows: msg.rows || 24,
+              term: msg.term || "xterm-256color",
+            });
             if (meta) {
               activeSessionId = meta.sessionId;
               authenticatedOperator = meta.operatorId;
@@ -175,9 +244,9 @@ export class TerminalGateway {
             return;
           }
 
-          // All subsequent messages require an established session
+          // All subsequent operations require an established, verified session
           if (!activeSessionId) {
-            this.sendSafeError(ws, "Unauthorized: Send auth frame or supply token in handshake");
+            this.sendSafeError(ws, "Unauthorized: Authenticate via ticket or auth frame");
             ws.close(1008, "Unauthorized");
             return;
           }
@@ -208,7 +277,7 @@ export class TerminalGateway {
         }
       });
 
-      // Handle socket closure
+      // Handle socket closure and error
       ws.on("close", () => {
         if (activeSessionId) {
           this.terminateSession(activeSessionId, "WebSocket disconnected");
@@ -227,17 +296,47 @@ export class TerminalGateway {
 
   private async handleInitialConnection(
     ws: WebSocket,
-    token: string,
-    serverId: string,
-    cols: number,
-    rows: number,
-    term: string
+    params: {
+      ticket?: string;
+      token?: string;
+      serverId?: string;
+      cols: number;
+      rows: number;
+      term: string;
+    }
   ): Promise<GatewaySessionMeta | null> {
-    // 1. Verify operator authentication
-    const auth = AuthService.verifyToken(token);
-    if (!auth.valid || !auth.operatorId) {
-      this.sendSafeError(ws, `Authentication failed: ${auth.error || "Invalid operator token"}`);
-      ws.close(1008, "Authentication failed");
+    let operatorId = "";
+    let serverId = "";
+
+    // 1. Authenticate via single-use ticket if provided
+    if (params.ticket) {
+      const ticketData = TicketService.consumeTicket(params.ticket);
+      if (!ticketData) {
+        this.sendSafeError(ws, "Authentication failed: Invalid, expired, or previously consumed ticket");
+        ws.close(1008, "Invalid ticket");
+        return null;
+      }
+      operatorId = ticketData.operatorId;
+      serverId = ticketData.serverId;
+    } else if (params.token && params.serverId) {
+      // In production, reject raw query tokens to enforce short-lived single-use tickets
+      if (process.env.NODE_ENV === "production") {
+        this.sendSafeError(ws, "Authentication failed: Single-use ticket required in production");
+        ws.close(1008, "Ticket required");
+        return null;
+      }
+
+      const auth = AuthService.verifyToken(params.token);
+      if (!auth.valid || !auth.operatorId) {
+        this.sendSafeError(ws, `Authentication failed: ${auth.error || "Invalid operator token"}`);
+        ws.close(1008, "Authentication failed");
+        return null;
+      }
+      operatorId = auth.operatorId;
+      serverId = params.serverId;
+    } else {
+      this.sendSafeError(ws, "Authentication failed: Missing ticket or credentials");
+      ws.close(1008, "Missing credentials");
       return null;
     }
 
@@ -248,7 +347,7 @@ export class TerminalGateway {
       return null;
     }
 
-    // 3. Resolve target server from inventory
+    // 3. Resolve target server from inventory (prevents open proxying)
     const server = StorageService.getServerById(serverId);
     if (!server) {
       this.sendSafeError(ws, `Server '${serverId}' not found in fleet inventory`);
@@ -265,9 +364,9 @@ export class TerminalGateway {
         sessionId,
         server,
         {
-          rows,
-          cols,
-          term,
+          rows: params.rows,
+          cols: params.cols,
+          term: params.term,
           onData: (chunk: Buffer) => {
             if (ws.readyState === WebSocket.OPEN) {
               // Backpressure handling: check buffered amount
@@ -309,7 +408,7 @@ export class TerminalGateway {
 
       const meta: GatewaySessionMeta = {
         sessionId,
-        operatorId: auth.operatorId,
+        operatorId,
         serverId: server.id,
         serverName: server.name,
         ws,
@@ -319,14 +418,14 @@ export class TerminalGateway {
 
       this.sessions.set(sessionId, meta);
 
-      // Log audit event
+      // Log audit event (without logging credentials or ticket secrets)
       StorageService.logAuditEvent({
-        actor: auth.operatorId,
+        actor: operatorId,
         eventType: "ssh_connect",
         targetServerId: server.id,
         targetServerName: server.name,
         status: "success",
-        details: { sessionId, transport: "websocket_gateway", cols, rows, term },
+        details: { sessionId, transport: "websocket_gateway", cols: params.cols, rows: params.rows, term: params.term },
       });
 
       // Notify client that connection is established
@@ -338,8 +437,8 @@ export class TerminalGateway {
         host: server.host,
         port: server.port,
         username: server.username,
-        cols,
-        rows,
+        cols: params.cols,
+        rows: params.rows,
       }));
 
       return meta;
@@ -396,7 +495,8 @@ export class TerminalGateway {
         }
       }
       SSHAdapter.cleanIdleSessions(this.idleTimeoutMs);
-    }, 30000); // Check every 30s
+      TicketService.pruneExpiredTickets();
+    }, 30000);
   }
 
   public listen(): Promise<number> {
@@ -445,7 +545,7 @@ export class TerminalGateway {
 if (typeof process !== "undefined" && process.argv[1] && process.argv[1].endsWith("terminalGateway.ts")) {
   const gateway = new TerminalGateway();
   gateway.listen().then((port) => {
-    console.log(`[PraxelOps] Authenticated SSH Terminal WebSocket Gateway listening on ws://localhost:${port}`);
+    console.log(`[PraxelOps] Authenticated SSH Terminal WebSocket Gateway listening on ws://127.0.0.1:${port}`);
   }).catch((err) => {
     console.error(`[PraxelOps] Failed to start Terminal Gateway:`, err);
     process.exit(1);

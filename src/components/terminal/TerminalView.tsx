@@ -170,15 +170,36 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         } catch {}
       }, 50);
 
-      // Connect to Authenticated WebSocket Terminal Gateway
-      const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = typeof window !== "undefined" ? window.location.hostname || "localhost" : "localhost";
-      const gatewayPort = process.env.NEXT_PUBLIC_WS_TERMINAL_PORT || "3001";
-      const wsUrl = `${protocol}//${host}:${gatewayPort}/terminal?serverId=${encodeURIComponent(
-        tab.serverId
-      )}&token=local-operator-token&cols=${term.cols}&rows=${term.rows}`;
+      // 1. Request secure single-use ticket from authenticated HTTPS endpoint
+      term.write("\x1b[90mAcquiring secure single-use terminal ticket...\x1b[0m\r\n");
+      let ticket = "";
+      try {
+        const ticketRes = await fetch("/api/ssh/ticket", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ serverId: tab.serverId }),
+        });
+        const ticketData = await ticketRes.json();
+        if (!ticketRes.ok || !ticketData.success || !ticketData.ticket) {
+          throw new Error(ticketData.error || "Failed to obtain authorized terminal ticket");
+        }
+        ticket = ticketData.ticket;
+      } catch (tktErr) {
+        term.write(`\r\n\x1b[31m[Authentication Error] ${(tktErr as Error).message}\x1b[0m\r\n`);
+        setConnectionStates((prev) => ({ ...prev, [tab.id]: "error" }));
+        setErrorMessages((prev) => ({ ...prev, [tab.id]: (tktErr as Error).message }));
+        return;
+      }
 
-      term.write("\x1b[90mConnecting to PraxelOps Terminal Gateway (" + wsUrl + ")...\x1b[0m\r\n");
+      // 2. Connect to Authenticated WebSocket Terminal Gateway using single-use ticket
+      const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+      const host = typeof window !== "undefined" ? window.location.hostname || "127.0.0.1" : "127.0.0.1";
+      const gatewayPort = process.env.NEXT_PUBLIC_WS_TERMINAL_PORT || "3001";
+      const wsUrl = `${protocol}//${host}:${gatewayPort}/terminal?ticket=${encodeURIComponent(
+        ticket
+      )}&cols=${term.cols}&rows=${term.rows}`;
+
+      term.write("\x1b[90mConnecting to PraxelOps Terminal Gateway (" + protocol + "//" + host + ":" + gatewayPort + ")...\x1b[0m\r\n");
 
       let ws: WebSocket;
       try {

@@ -61,6 +61,10 @@ export class SSHAdapter {
       config.password = credentials.password;
     } else if (credentials?.privateKey) {
       config.privateKey = credentials.privateKey;
+    } else if ((server as { password?: string }).password) {
+      config.password = (server as { password?: string }).password;
+    } else if ((server as { privateKey?: string }).privateKey) {
+      config.privateKey = (server as { privateKey?: string }).privateKey;
     }
 
     return config;

@@ -11,8 +11,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const action = body.action || "create";
+
+    if (action === "ticket") {
+      const { serverId } = body;
+      if (!serverId) {
+        return NextResponse.json({ success: false, error: "serverId required" }, { status: 400 });
+      }
+      const { TicketService } = await import("@/lib/security/ticket");
+      const server = StorageService.getServerById(serverId);
+      if (!server) {
+        return NextResponse.json({ success: false, error: "Server not found" }, { status: 404 });
+      }
+      const ticketObj = TicketService.issueTicket(auth.operatorId, server.id, 60);
+      return NextResponse.json({
+        success: true,
+        ticket: ticketObj.ticket,
+        serverId: server.id,
+        expiresIn: 60,
+      });
+    }
 
     if (action === "resize") {
       const { sessionId, rows, cols } = body;

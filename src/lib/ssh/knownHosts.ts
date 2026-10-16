@@ -88,6 +88,16 @@ export class KnownHostsService {
     writeKnownHosts({});
   }
 
+  /**
+   * Remove a single host key entry
+   */
+  static removeHostKey(host: string, port: number): void {
+    const key = `${host}:${port}`;
+    const knownHosts = readKnownHosts();
+    delete knownHosts[key];
+    writeKnownHosts(knownHosts);
+  }
+
   static getKnownHosts(): Record<string, KnownHostEntry> {
     return readKnownHosts();
   }
