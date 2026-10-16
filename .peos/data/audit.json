@@ -1,0 +1,20 @@
+[
+  {
+    "actor": "test-user",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-local-01",
+    "targetServerName": "Localhost Hypervisor",
+    "status": "success",
+    "id": "audit-1792166327283-3eez6",
+    "timestamp": "2026-10-16T15:58:47.283Z"
+  },
+  {
+    "actor": "test-user",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-local-01",
+    "targetServerName": "Localhost Hypervisor",
+    "status": "success",
+    "id": "audit-1792165543143-cf67d",
+    "timestamp": "2026-10-16T15:45:43.143Z"
+  }
+]

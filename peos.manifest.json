@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "PraxelOps",
+  "version": "1.0.0",
+  "description": "AI-powered infrastructure operations platform with a premium macOS-inspired desktop and web interface",
+  "governance": {
+    "spec": "PEOS-v2",
+    "strictTypeScript": true,
+    "immutableAuditLog": true,
+    "explicitApprovalRequired": true
+  },
+  "modules": [
+    {
+      "id": "macos-studio",
+      "name": "macOS Studio Desktop Shell",
+      "status": "in-progress",
+      "path": "src/components/macos"
+    },
+    {
+      "id": "ssh-core",
+      "name": "SSH Connection & Terminal Multiplexer",
+      "status": "planned",
+      "path": "src/lib/ssh"
+    },
+    {
+      "id": "sftp-browser",
+      "name": "SFTP Remote File Browser",
+      "status": "planned",
+      "path": "src/lib/sftp"
+    },
+    {
+      "id": "telemetry-engine",
+      "name": "Server Inventory & Live Telemetry",
+      "status": "planned",
+      "path": "src/lib/telemetry"
+    },
+    {
+      "id": "ai-copilot",
+      "name": "AI Diagnostics & Guarded Command Generator",
+      "status": "planned",
+      "path": "src/lib/ai"
+    },
+    {
+      "id": "deployment-runner",
+      "name": "Deployment Workflows & Log Streaming",
+      "status": "planned",
+      "path": "src/lib/deployments"
+    },
+    {
+      "id": "audit-security",
+      "name": "Security Verification & Audit Trail",
+      "status": "planned",
+      "path": "src/lib/security"
+    }
+  ],
+  "frozenContracts": [
+    "src/types/server.ts",
+    "src/types/ssh.ts",
+    "src/types/ai.ts",
+    "src/types/deployment.ts",
+    "src/types/audit.ts"
+  ]
+}

@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
+  --window-bg: rgba(255, 255, 255, 0.78);
+  --window-border: rgba(0, 0, 0, 0.08);
+  --sidebar-bg: rgba(240, 240, 245, 0.72);
+  --card-bg: rgba(255, 255, 255, 0.85);
+  --card-border: rgba(0, 0, 0, 0.06);
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --accent-foreground: #ffffff;
+  --traffic-red: #ff5f56;
+  --traffic-yellow: #ffbd2e;
+  --traffic-green: #27c93f;
+  --subtle-text: #86868b;
+  --terminal-bg: #1e1e1e;
+  --terminal-fg: #f8f8f2;
+}
+
+[data-theme="dark"] {
+  --background: #0f1015;
+  --foreground: #f5f5f7;
+  --window-bg: rgba(26, 27, 36, 0.82);
+  --window-border: rgba(255, 255, 255, 0.08);
+  --sidebar-bg: rgba(20, 21, 28, 0.78);
+  --card-bg: rgba(30, 31, 42, 0.85);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --accent: #2997ff;
+  --accent-hover: #409cff;
+  --accent-foreground: #ffffff;
+  --traffic-red: #ff5f56;
+  --traffic-yellow: #ffbd2e;
+  --traffic-green: #27c93f;
+  --subtle-text: #a1a1a6;
+  --terminal-bg: #14151c;
+  --terminal-fg: #f5f5f7;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+}
+
+/* Translucent Glassmorphism */
+.macos-glass {
+  background-color: var(--window-bg);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--window-border);
+}
+
+.macos-card {
+  background-color: var(--card-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.05);
+}
+
+/* Traffic Lights */
+.traffic-btn {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+}
+
+.traffic-close {
+  background-color: var(--traffic-red);
+}
+
+.traffic-min {
+  background-color: var(--traffic-yellow);
+}
+
+.traffic-max {
+  background-color: var(--traffic-green);
+}
+
+/* Slim Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(134, 134, 139, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(134, 134, 139, 0.5);
+}
