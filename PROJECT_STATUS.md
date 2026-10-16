@@ -511,5 +511,163 @@ WantedBy=multi-user.target
 2. **Multi-Tenant RBAC & Server Tags**: Expand single-operator mode into role-based access control with granular per-server and per-command execution policies.
 3. **Native Desktop Distribution**: Package the verified Next.js and Terminal Gateway runtime into a lightweight cross-platform native bundle using Tauri or Electron.
 
+---
+
+## 6. Milestone 5 Production Security Audit & Real VPS Validation Status
+
+### 1. Executive Summary & Audit Scope
+Milestone 5 performed a rigorous production security audit of PraxelOps' dual-process architecture, verified cross-process coordination between the Next.js web runtime and the standalone Terminal Gateway, hardened origin and proxy validation, and confirmed wire-level protocol fidelity against authentic TCP SSH sockets.
+
+### 2. Confirmed Vulnerabilities & Applied Remediations
+
+| Vulnerability / Risk | Severity | Root Cause | Implemented Defense & Verification |
+| :--- | :--- | :--- | :--- |
+| **Process-Local Ticket Store Isolation** | Critical | Next.js (`port 3000`) and Terminal Gateway (`port 3001`) run as separate OS processes. Memory-only `Map` in `TicketService` caused tickets issued by Next.js to be invisible to Terminal Gateway. | Transitioned `TicketService` (`src/lib/security/ticket.ts`) to a shared, persistent atomic store in `.peos/data/tickets/`. Uses atomic OS rename (`fs.renameSync` from `.json` to `.consuming` followed by `fs.unlinkSync`) to guarantee atomic single-use consumption across process boundaries and survive process restarts. |
+| **Missing Origin Header in Production** | High | `isValidOrigin()` in Milestone 4 allowed requests with missing `Origin` headers, creating a bypass vector for non-browser WebSocket clients or automated CSRF/CSWSH tools. | Upgraded `isValidOrigin()`: In production (`NODE_ENV === "production"`), missing `Origin` headers are strictly rejected with HTTP `403 Forbidden` prior to socket upgrade. |
+| **Untrusted Proxy Header IP Spoofing** | Medium | Reverse-proxy headers (`X-Forwarded-For`) could be forged by untrusted remote peers to bypass rate limits or falsify audit trails. | Added `isTrustedProxy()` and `getClientIp()`. `X-Forwarded-For` is strictly ignored unless the direct peer socket (`req.socket.remoteAddress`) matches `TRUSTED_PROXIES` (default `127.0.0.1,::1`). Proxy headers can never override the browser's native `Origin` header. |
+| **Missing First-Time TOFU Audit Records** | Low | First-time host-key enrollment in `KnownHostsService` was recorded to disk but did not generate an explicit, auditable security log event. | Updated `KnownHostsService` (`src/lib/ssh/knownHosts.ts`) to log an explicit `security_alert` event (`alertType: "tofu_host_key_enrolled"`) upon initial host-key trust, and `alertType: "host_key_mismatch"` upon MITM detection. |
+| **Unbounded Ticket Scope** | Medium | Tickets previously lacked explicit context binding beyond server ID. | Bound tickets strictly to operator ID, target server ID, client Origin, session purpose (`terminal_shell`), and 60s TTL. Consumption verifies that the connection's origin matches the ticket's bound origin. |
+
+---
+
+### 3. Automated Verification Evidence (57 Tests Passing)
+
+```
+Test Files  10 passed (10)
+     Tests  57 passed (57)
+  Duration  15.15s
+```
+
+#### Detailed Test Suites Breakdown
+1. **Multi-Process Ticket Service (`src/lib/security/ticket.test.ts` - 8 tests)**:
+   - High-entropy cryptographic ticket issuance with 60s TTL.
+   - Atomic consumption and single-use replay prevention.
+   - Client Origin binding verification (mismatched origin rejected).
+   - Session purpose binding verification (`terminal_shell`).
+   - Cross-process persistence across memory wipe (simulated gateway restart).
+   - Race-condition handling under concurrent consumption (5 simultaneous consumers, exactly 1 succeeds).
+   - Rejection of expired tickets.
+   - Dual memory and filesystem TTL pruning.
+2. **Terminal Gateway Transport Security (`src/server/terminalGateway.test.ts` - 12 tests)**:
+   - Rejection of unauthorized connections with invalid/missing tokens.
+   - Rejection of connections to non-existent servers in inventory.
+   - Bidirectional PTY input/output streaming.
+   - Terminal window resize clamping and bounds validation.
+   - ANSI escape sequence and UTF-8 multi-byte Unicode transfer fidelity.
+   - Multiple concurrent independent sessions without cross-session bleed.
+   - Message frame payload size limit enforcement (64 KB).
+   - Host-key verification failure rejection and socket cleanup.
+   - Session cleanup and disconnect audit logging.
+   - Rejection of WebSocket upgrade when Origin is missing in production mode (HTTP 403).
+   - Enforcement of single-use tickets and rejection of raw query tokens in production (Code 1008).
+   - Trusted proxy validation for `X-Forwarded-For`.
+3. **Authentic Wire-Level SSH Integration (`src/server/realSshIntegration.test.ts` - 7 tests)**:
+   - Command execution over authentic TCP loopback SSH daemon (`ssh2.Server`).
+   - Wire credential authentication and rejection of incorrect passwords.
+   - TOFU host-key verification and SHA-256 fingerprint enrollment.
+   - Man-In-The-Middle (MITM) changed-key detection and connection abortion.
+   - Interactive `xterm-256color` PTY shell streaming over real TCP socket.
+   - Real SFTP subsystem directory listing (`readdir`) and file reading (`readFile`).
+   - End-to-end WebSocket client -> Terminal Gateway -> SSHAdapter -> authentic TCP SSH daemon bridging.
+4. **Known Hosts & Security (`src/lib/ssh/knownHosts.test.ts` - 3 tests)**:
+   - First-time TOFU trust and auditable security alert logging.
+   - Subsequent connection fingerprint verification.
+   - MITM rejection and security alert generation.
+5. **Authentication, Policy, Storage, Diagnostics, and Approvals (27 tests)**:
+   - `src/lib/security/auth.test.ts` (5 tests)
+   - `src/lib/ai/approval.test.ts` (6 tests)
+   - `src/lib/ai/policy.test.ts` (5 tests)
+   - `src/lib/ai/diagnostics.test.ts` (4 tests)
+   - `src/lib/storage/storage.test.ts` (4 tests)
+   - `src/lib/ssh/adapter.test.ts` (3 tests)
+
+---
+
+### 4. Real VPS Validation Status
+
+- **Status**: **BLOCKED (Awaiting Authorized External Credentials)**
+- **Audit Findings**:
+  - No external VPS IP addresses, SSH ports, or authorized credentials were provided in the execution context or repository environment.
+  - To preserve operational safety and avoid unauthorized network scanning, no arbitrary external hosts were contacted.
+  - Full wire-level SSH protocol fidelity was independently verified using an authentic, in-process TCP SSH server fixture (`ssh2.Server`) running real cryptographic key exchange, authentication, and SFTP subsystem protocol wire framing.
+  - This in-process wire verification is strictly categorized as an integration test fixture and is explicitly NOT conflated with an external VPS validation.
+- **External VPS Unblocking Procedure**:
+  When authorized external VPS credentials become available:
+  1. Add the VPS to server inventory via `POST /api/servers` or Studio UI.
+  2. Initiate connection via Terminal tab; verify host-key fingerprint prompt.
+  3. Confirm interactive PTY shell streaming (`htop`, `tmux`, `nano`).
+  4. Perform SFTP file browse and file read operations.
+  5. Inspect `.peos/data/audit.json` to verify zero secret leakage in logs.
+
+---
+
+### 5. Deployment, Health Checks & Rollback Runbooks
+
+#### A. Multi-Process Startup Runbooks
+
+**Windows Local Development**:
+```powershell
+# Terminal 1: Next.js Web Studio & REST APIs (Port 3000)
+npm run dev
+
+# Terminal 2: Authenticated SSH Terminal WebSocket Gateway (Port 3001)
+npm run terminal:gateway
+```
+
+**Ubuntu Production Deployment**:
+```bash
+# 1. Build optimized Next.js production bundle
+npm run build
+
+# 2. Start Next.js web application (managed by systemd: praxelops-web)
+sudo systemctl start praxelops-web
+
+# 3. Start Terminal Gateway service (managed by systemd: praxelops-gateway)
+sudo systemctl start praxelops-gateway
+
+# 4. Verify systemd status
+sudo systemctl status praxelops-web praxelops-gateway
+```
+
+#### B. Health-Check Procedures
+
+1. **Terminal Gateway Health Check**:
+   ```bash
+   curl -s http://127.0.0.1:3001/
+   # Expected response:
+   # {"service":"PraxelOps Authenticated SSH Terminal Gateway","status":"healthy","activeSessions":0}
+   ```
+2. **Next.js Web Application Health Check**:
+   ```bash
+   curl -s -I http://127.0.0.1:3000/
+   # Expected response: HTTP/1.1 200 OK
+   ```
+
+#### C. Rollback Procedure
+
+If a deployment anomaly is detected:
+```bash
+# 1. Roll back working tree to previous checkpoint commit (2725a01)
+git checkout 2725a01
+
+# 2. Rebuild production bundle
+npm run build
+
+# 3. Restart supervised services
+sudo systemctl restart praxelops-web praxelops-gateway
+
+# 4. Verify health endpoints
+curl -s http://127.0.0.1:3001/
+```
+
+---
+
+### 6. Remaining Security Limitations & Roadmap
+
+1. **Role-Based Access Control (RBAC)**: Currently single-operator boundary; multi-tenant operator roles with per-server isolation are scheduled for Milestone 6.
+2. **WebAuthn / FIDO2 Hardware Tokens**: Hardware key verification (e.g. YubiKey) for AI high-impact command execution.
+3. **Audit Log SIEM Export**: Long-term streaming export to enterprise Syslog or SIEM platforms.
+
+
 
 

@@ -37,3 +37,8 @@ desktop.ini
 # TypeScript build cache
 *.tsbuildinfo
 next-env.d.ts
+
+# Ephemeral runtime data
+.peos/data/tickets/
+.peos/data/test_tickets*/
+

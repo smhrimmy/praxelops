@@ -379,4 +379,78 @@ describe("TerminalGateway WebSocket Transport", () => {
     );
     expect(gateway.getActiveSessionCount()).toBe(0);
   });
+
+  it("rejects WebSocket upgrade when Origin is missing in production mode", async () => {
+    const origEnv = process.env.NODE_ENV;
+    try {
+      (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+
+      const gw = new TerminalGateway({ port: 0 });
+      const p = await gw.listen();
+
+      // Attempt WebSocket connection without Origin header
+      const ws = new WebSocket(`ws://127.0.0.1:${p}/terminal?serverId=${mockServer.id}`);
+
+      const errPromise = new Promise<{ code?: number; error?: Error }>((resolve) => {
+        ws.on("error", (err) => resolve({ error: err }));
+        ws.on("unexpected-response", (_req, res) => {
+          resolve({ code: res.statusCode });
+        });
+      });
+
+      const outcome = await errPromise;
+      expect(outcome.code).toBe(403);
+
+      await gw.close();
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = origEnv;
+    }
+  });
+
+  it("enforces single-use ticket and rejects raw query tokens in production mode", async () => {
+    const origEnv = process.env.NODE_ENV;
+    try {
+      (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+
+      const gw = new TerminalGateway({
+        port: 0,
+        allowedOrigins: ["http://localhost:3000"],
+      });
+      const p = await gw.listen();
+
+      const ws = new WebSocket(`ws://127.0.0.1:${p}/terminal?serverId=${mockServer.id}&token=some-token`, {
+        headers: { Origin: "http://localhost:3000" },
+      });
+
+      const codePromise = new Promise<number>((resolve) => {
+        ws.on("close", (code) => resolve(code));
+      });
+
+      const code = await codePromise;
+      expect(code).toBe(1008);
+
+      await gw.close();
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = origEnv;
+    }
+  });
+
+  it("validates client IP from X-Forwarded-For only when peer is a trusted proxy", () => {
+    const gw = new TerminalGateway();
+
+    // From untrusted remote IP: X-Forwarded-For is ignored
+    const untrustedReq = {
+      socket: { remoteAddress: "203.0.113.195" },
+      headers: { "x-forwarded-for": "198.51.100.2" },
+    } as any;
+    expect(gw.getClientIp(untrustedReq)).toBe("203.0.113.195");
+
+    // From trusted loopback proxy (127.0.0.1): X-Forwarded-For is extracted
+    const trustedReq = {
+      socket: { remoteAddress: "127.0.0.1" },
+      headers: { "x-forwarded-for": "198.51.100.2, 10.0.0.1" },
+    } as any;
+    expect(gw.getClientIp(trustedReq)).toBe("198.51.100.2");
+  });
 });
+

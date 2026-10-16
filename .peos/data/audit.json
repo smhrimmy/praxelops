@@ -5,6 +5,369 @@
     "targetServerId": "srv-test-real-01",
     "targetServerName": "Test Cluster Node",
     "status": "success",
+    "id": "audit-1792174301829-5pjt3",
+    "timestamp": "2026-10-16T18:11:41.829Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "192.168.1.100:22",
+    "status": "denied",
+    "details": {
+      "alertType": "host_key_mismatch",
+      "host": "192.168.1.100",
+      "port": 22,
+      "expectedFingerprint": "SHA256:d3lHN/YypWE4VWJdUYdUW6gC9cxSn8vEbPM5yqgU1Aw=",
+      "receivedFingerprint": "SHA256:ebl2Te7zgXNihwgDn9+tgFJE9YO2BsvgZEnAPFvocgI="
+    },
+    "id": "audit-1792174301043-def77",
+    "timestamp": "2026-10-16T18:11:41.043Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "192.168.1.100:22",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "192.168.1.100",
+      "port": 22,
+      "fingerprint": "SHA256:d3lHN/YypWE4VWJdUYdUW6gC9cxSn8vEbPM5yqgU1Aw="
+    },
+    "id": "audit-1792174301032-cs55m",
+    "timestamp": "2026-10-16T18:11:41.032Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "192.168.1.100:22",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "192.168.1.100",
+      "port": 22,
+      "fingerprint": "SHA256:d3lHN/YypWE4VWJdUYdUW6gC9cxSn8vEbPM5yqgU1Aw="
+    },
+    "id": "audit-1792174300975-wuppu",
+    "timestamp": "2026-10-16T18:11:40.975Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "192.168.1.100:22",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "192.168.1.100",
+      "port": 22,
+      "fingerprint": "SHA256:d3lHN/YypWE4VWJdUYdUW6gC9cxSn8vEbPM5yqgU1Aw="
+    },
+    "id": "audit-1792174300866-p6cgw",
+    "timestamp": "2026-10-16T18:11:40.866Z"
+  },
+  {
+    "actor": "operator-wire",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-real-wire-01",
+    "targetServerName": "Real Wire Test Node",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174298463-5a1b894b",
+      "durationMs": 29
+    },
+    "id": "audit-1792174298621-emceg",
+    "timestamp": "2026-10-16T18:11:38.621Z"
+  },
+  {
+    "actor": "operator-wire",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-real-wire-01",
+    "targetServerName": "Real Wire Test Node",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174298463-5a1b894b",
+      "transport": "websocket_gateway",
+      "cols": 90,
+      "rows": 30,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174298591-gfjzp",
+    "timestamp": "2026-10-16T18:11:38.591Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "127.0.0.1:55274",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "127.0.0.1",
+      "port": 55274,
+      "fingerprint": "SHA256:s86HZOxoX65x9dTH6PrtJ6ulzP+ypwrsZ0iI9Z12Ibg="
+    },
+    "id": "audit-1792174297920-x2ion",
+    "timestamp": "2026-10-16T18:11:37.920Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "127.0.0.1:55274",
+    "status": "denied",
+    "details": {
+      "alertType": "host_key_mismatch",
+      "host": "127.0.0.1",
+      "port": 55274,
+      "expectedFingerprint": "SHA256:hFQcr6o9lBZPoJkwmPLTScI8+WKEjv6bfNJGvzYK6S0=",
+      "receivedFingerprint": "SHA256:s86HZOxoX65x9dTH6PrtJ6ulzP+ypwrsZ0iI9Z12Ibg="
+    },
+    "id": "audit-1792174297842-kdder",
+    "timestamp": "2026-10-16T18:11:37.842Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "127.0.0.1:55274",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "127.0.0.1",
+      "port": 55274,
+      "fingerprint": "SHA256:hFQcr6o9lBZPoJkwmPLTScI8+WKEjv6bfNJGvzYK6S0="
+    },
+    "id": "audit-1792174297813-47kci",
+    "timestamp": "2026-10-16T18:11:37.813Z"
+  },
+  {
+    "actor": "system",
+    "eventType": "security_alert",
+    "targetServerId": "127.0.0.1:55274",
+    "status": "success",
+    "details": {
+      "alertType": "tofu_host_key_enrolled",
+      "host": "127.0.0.1",
+      "port": 55274,
+      "fingerprint": "SHA256:s86HZOxoX65x9dTH6PrtJ6ulzP+ypwrsZ0iI9Z12Ibg="
+    },
+    "id": "audit-1792174297526-n35uc",
+    "timestamp": "2026-10-16T18:11:37.526Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174297351-b1900bfb",
+      "durationMs": 49
+    },
+    "id": "audit-1792174297404-s0huv",
+    "timestamp": "2026-10-16T18:11:37.404Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174297351-b1900bfb",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174297364-1azem",
+    "timestamp": "2026-10-16T18:11:37.364Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174297143-c250a2a5",
+      "durationMs": 75
+    },
+    "id": "audit-1792174297220-4q7ld",
+    "timestamp": "2026-10-16T18:11:37.220Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174297143-c250a2a5",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174297161-bcnc3",
+    "timestamp": "2026-10-16T18:11:37.161Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-02",
+    "targetServerName": "Secondary PTY Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174297055-35531384",
+      "durationMs": 55
+    },
+    "id": "audit-1792174297116-cgi3c",
+    "timestamp": "2026-10-16T18:11:37.116Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174297039-e307bd6d",
+      "durationMs": 60
+    },
+    "id": "audit-1792174297102-vni5o",
+    "timestamp": "2026-10-16T18:11:37.103Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-02",
+    "targetServerName": "Secondary PTY Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174297055-35531384",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174297058-eb5w5",
+    "timestamp": "2026-10-16T18:11:37.058Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174297039-e307bd6d",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174297041-pidoc",
+    "timestamp": "2026-10-16T18:11:37.041Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174296983-5092fe89",
+      "durationMs": 9
+    },
+    "id": "audit-1792174296994-l8k6s",
+    "timestamp": "2026-10-16T18:11:36.994Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174296983-5092fe89",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174296985-azo7k",
+    "timestamp": "2026-10-16T18:11:36.985Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174296806-c17da517",
+      "durationMs": 144
+    },
+    "id": "audit-1792174296952-rteux",
+    "timestamp": "2026-10-16T18:11:36.952Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174296806-c17da517",
+      "transport": "websocket_gateway",
+      "cols": 80,
+      "rows": 24,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174296808-shxsq",
+    "timestamp": "2026-10-16T18:11:36.808Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_disconnect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "details": {
+      "sessionId": "pty-1792174296628-615dcfb4",
+      "durationMs": 142
+    },
+    "id": "audit-1792174296782-pevff",
+    "timestamp": "2026-10-16T18:11:36.782Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-pty-test-01",
+    "targetServerName": "PTY Test Server",
+    "status": "success",
+    "ipAddress": "127.0.0.1",
+    "details": {
+      "sessionId": "pty-1792174296628-615dcfb4",
+      "transport": "websocket_gateway",
+      "cols": 100,
+      "rows": 30,
+      "term": "xterm-256color"
+    },
+    "id": "audit-1792174296641-m2m1o",
+    "timestamp": "2026-10-16T18:11:36.641Z"
+  },
+  {
+    "actor": "test-operator",
+    "eventType": "ssh_connect",
+    "targetServerId": "srv-test-real-01",
+    "targetServerName": "Test Cluster Node",
+    "status": "success",
     "id": "audit-1792170193436-z4d9t",
     "timestamp": "2026-10-16T17:03:13.436Z"
   },

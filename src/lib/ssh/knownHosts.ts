@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { StorageService } from "@/lib/storage";
 
 const DATA_DIR = path.resolve(process.cwd(), ".peos", "data");
 const KNOWN_HOSTS_FILE = path.join(DATA_DIR, "known_hosts.json");
@@ -55,7 +56,7 @@ export class KnownHostsService {
     const existing = knownHosts[key];
 
     if (!existing) {
-      // Trust on first use
+      // Trust on first use: explicitly enrolled and audited
       knownHosts[key] = {
         host,
         port,
@@ -64,10 +65,42 @@ export class KnownHostsService {
         lastVerifiedAt: new Date().toISOString(),
       };
       writeKnownHosts(knownHosts);
+
+      try {
+        StorageService.logAuditEvent({
+          actor: "system",
+          eventType: "security_alert",
+          targetServerId: key,
+          status: "success",
+          details: {
+            alertType: "tofu_host_key_enrolled",
+            host,
+            port,
+            fingerprint: currentFingerprint,
+          },
+        });
+      } catch {}
+
       return { verified: true, isNew: true, fingerprint: currentFingerprint };
     }
 
     if (existing.fingerprint !== currentFingerprint) {
+      try {
+        StorageService.logAuditEvent({
+          actor: "system",
+          eventType: "security_alert",
+          targetServerId: key,
+          status: "denied",
+          details: {
+            alertType: "host_key_mismatch",
+            host,
+            port,
+            expectedFingerprint: existing.fingerprint,
+            receivedFingerprint: currentFingerprint,
+          },
+        });
+      } catch {}
+
       return {
         verified: false,
         isNew: false,

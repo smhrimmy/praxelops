@@ -36,8 +36,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // Issue short-lived, single-use ticket (60s TTL)
-    const ticketObj = TicketService.issueTicket(auth.operatorId, server.id, 60);
+    const origin = request.headers.get("origin") || undefined;
+    const purpose = typeof body.purpose === "string" ? body.purpose : "terminal_shell";
+
+    // Issue short-lived, single-use ticket (60s TTL) bound to operator, server, origin, purpose
+    const ticketObj = TicketService.issueTicket(auth.operatorId, server.id, {
+      ttlSeconds: 60,
+      origin,
+      purpose,
+    });
 
     StorageService.logAuditEvent({
       actor: auth.operatorId,
@@ -45,7 +52,7 @@ export async function POST(request: Request) {
       targetServerId: server.id,
       targetServerName: server.name,
       status: "success",
-      details: { action: "ticket_issued", expiresIn: 60 },
+      details: { action: "ticket_issued", expiresIn: 60, purpose },
     });
 
     return NextResponse.json({

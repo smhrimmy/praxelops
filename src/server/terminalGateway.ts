@@ -81,23 +81,34 @@ export class TerminalGateway {
     this.startReaper();
   }
 
-  private isValidOrigin(originHeader?: string): boolean {
+  public isValidOrigin(originHeader?: string, remoteAddress?: string): boolean {
+    const isProduction = process.env.NODE_ENV === "production";
+
+    // In production, Origin is MANDATORY for all WebSocket upgrades to prevent CSWSH
     if (!originHeader) {
-      return true;
+      if (isProduction) {
+        return false;
+      }
+      // In dev/test: allow if connection originates from local machine
+      const remote = (remoteAddress || "").replace(/^::ffff:/, "");
+      return remote === "127.0.0.1" || remote === "::1" || remote === "";
     }
 
     try {
       const originUrl = new URL(originHeader);
       const originHost = originUrl.hostname.toLowerCase();
-
-      // Safe loopback hosts
-      if (originHost === "localhost" || originHost === "127.0.0.1" || originHost === "::1") {
-        return true;
-      }
+      const normalizedOrigin = originUrl.origin.toLowerCase();
 
       // Check configured allowlist
       if (this.allowedOrigins.length > 0) {
-        if (this.allowedOrigins.some(o => o.toLowerCase() === originUrl.origin.toLowerCase() || o.toLowerCase() === originHost)) {
+        if (
+          this.allowedOrigins.some(
+            (o) =>
+              o.toLowerCase() === normalizedOrigin ||
+              o.toLowerCase() === originHost ||
+              o.toLowerCase() === originUrl.host.toLowerCase()
+          )
+        ) {
           return true;
         }
       }
@@ -112,13 +123,24 @@ export class TerminalGateway {
       for (const allowed of allowedList) {
         try {
           const allowedUrl = new URL(allowed);
-          if (allowedUrl.origin.toLowerCase() === originUrl.origin.toLowerCase()) {
+          if (allowedUrl.origin.toLowerCase() === normalizedOrigin) {
             return true;
           }
         } catch {
-          if (allowed === originHost || allowed === originHeader.toLowerCase()) {
+          if (
+            allowed === originHost ||
+            allowed === originUrl.host.toLowerCase() ||
+            allowed === originHeader.toLowerCase()
+          ) {
             return true;
           }
+        }
+      }
+
+      // In non-production only, allow loopback hosts
+      if (!isProduction) {
+        if (originHost === "localhost" || originHost === "127.0.0.1" || originHost === "::1") {
+          return true;
         }
       }
 
@@ -126,6 +148,31 @@ export class TerminalGateway {
     } catch {
       return false;
     }
+  }
+
+  public isTrustedProxy(remoteAddress?: string): boolean {
+    if (!remoteAddress) return false;
+    const cleanAddr = remoteAddress.replace(/^::ffff:/, "");
+    const envProxies = (process.env.TRUSTED_PROXIES || "127.0.0.1,::1")
+      .split(",")
+      .map((s) => s.trim().toLowerCase().replace(/^::ffff:/, ""))
+      .filter(Boolean);
+
+    return envProxies.includes(cleanAddr.toLowerCase());
+  }
+
+  public getClientIp(req: http.IncomingMessage): string {
+    const directIp = (req.socket.remoteAddress || "").replace(/^::ffff:/, "");
+    if (this.isTrustedProxy(directIp)) {
+      const forwarded = req.headers["x-forwarded-for"];
+      if (typeof forwarded === "string" && forwarded.trim()) {
+        const parts = forwarded.split(",").map((p) => p.trim());
+        if (parts.length > 0 && parts[0]) {
+          return parts[0];
+        }
+      }
+    }
+    return directIp || "127.0.0.1";
   }
 
   private setupHttpUpgrade(): void {
@@ -141,7 +188,7 @@ export class TerminalGateway {
 
       // 2. Validate Origin (Cross-Origin WebSocket Hijacking CSWSH prevention)
       const origin = req.headers.origin;
-      if (origin && !this.isValidOrigin(origin)) {
+      if (!this.isValidOrigin(origin, req.socket.remoteAddress)) {
         socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
@@ -172,6 +219,8 @@ export class TerminalGateway {
       const initialCols = parseInt(fullUrl.searchParams.get("cols") || "80", 10);
       const initialRows = parseInt(fullUrl.searchParams.get("rows") || "24", 10);
       const initialTerm = fullUrl.searchParams.get("term") || "xterm-256color";
+      const requestOrigin = req.headers.origin;
+      const clientIp = this.getClientIp(req);
 
       // Connect immediately if ticket is provided, or if dev/test credentials are provided
       if (initialTicket || (initialToken && initialServerId)) {
@@ -182,6 +231,8 @@ export class TerminalGateway {
           cols: initialCols,
           rows: initialRows,
           term: initialTerm,
+          origin: requestOrigin,
+          clientIp,
         })
           .then((meta) => {
             if (meta) {
@@ -236,6 +287,8 @@ export class TerminalGateway {
               cols: msg.cols || 80,
               rows: msg.rows || 24,
               term: msg.term || "xterm-256color",
+              origin: requestOrigin,
+              clientIp,
             });
             if (meta) {
               activeSessionId = meta.sessionId;
@@ -303,6 +356,8 @@ export class TerminalGateway {
       cols: number;
       rows: number;
       term: string;
+      origin?: string;
+      clientIp?: string;
     }
   ): Promise<GatewaySessionMeta | null> {
     let operatorId = "";
@@ -310,7 +365,10 @@ export class TerminalGateway {
 
     // 1. Authenticate via single-use ticket if provided
     if (params.ticket) {
-      const ticketData = TicketService.consumeTicket(params.ticket);
+      const ticketData = TicketService.consumeTicket(params.ticket, {
+        expectedOrigin: params.origin,
+        expectedPurpose: "terminal_shell",
+      });
       if (!ticketData) {
         this.sendSafeError(ws, "Authentication failed: Invalid, expired, or previously consumed ticket");
         ws.close(1008, "Invalid ticket");
@@ -425,6 +483,7 @@ export class TerminalGateway {
         targetServerId: server.id,
         targetServerName: server.name,
         status: "success",
+        ipAddress: params.clientIp,
         details: { sessionId, transport: "websocket_gateway", cols: params.cols, rows: params.rows, term: params.term },
       });
 
