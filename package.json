@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "terminal:gateway": "node --experimental-strip-types src/server/terminalGateway.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

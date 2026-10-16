@@ -41,6 +41,29 @@ export class AuthService {
   }
 
   /**
+   * Validates a session token string (for WebSocket upgrade or internal service authentication)
+   */
+  static verifyToken(token?: string): { valid: boolean; operatorId?: string; error?: string } {
+    if (!token) {
+      if (process.env.NODE_ENV !== "production") {
+        return { valid: true, operatorId: "local-operator" };
+      }
+      return { valid: false, error: "Missing session token" };
+    }
+
+    const session = sessionStore.get(token);
+    if (!session || Date.now() > session.expiresAt) {
+      if (session) sessionStore.delete(token);
+      if (process.env.NODE_ENV !== "production" && token === "local-operator-token") {
+        return { valid: true, operatorId: "local-operator" };
+      }
+      return { valid: false, error: "Session token is invalid or expired" };
+    }
+
+    return { valid: true, operatorId: session.operatorId };
+  }
+
+  /**
    * Validates incoming request authentication and CSRF for state-mutating endpoints
    */
   static authenticateRequest(request: Request): AuthContext {

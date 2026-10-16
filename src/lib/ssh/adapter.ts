@@ -1,4 +1,4 @@
-import { Client, ConnectConfig, SFTPWrapper } from "ssh2";
+import { Client, ConnectConfig, SFTPWrapper, ClientChannel } from "ssh2";
 import { ServerHost } from "@/types/server";
 import { RemoteFileItem } from "@/types/ssh";
 import { KnownHostsService } from "./knownHosts";
@@ -10,13 +10,25 @@ export interface ExecResult {
   durationMs: number;
 }
 
+export interface CreateSessionOptions {
+  rows?: number;
+  cols?: number;
+  term?: string;
+  onData?: (data: Buffer) => void;
+  onClose?: (code?: number) => void;
+  onError?: (err: Error) => void;
+}
+
 export interface InteractiveShellSession {
   sessionId: string;
   serverId: string;
   client: Client;
-  stream: any;
+  stream: ClientChannel;
   createdAt: number;
   lastActiveAt: number;
+  onData?: (data: Buffer) => void;
+  onClose?: (code?: number) => void;
+  onError?: (err: Error) => void;
 }
 
 export class SSHAdapter {
@@ -257,11 +269,12 @@ export class SSHAdapter {
   static async createInteractiveSession(
     sessionId: string,
     server: ServerHost,
-    options: { rows?: number; cols?: number; term?: string } = {},
+    options: CreateSessionOptions = {},
     credentials?: { password?: string; privateKey?: string }
   ): Promise<{ sessionId: string; serverId: string }> {
     return new Promise((resolve, reject) => {
       const conn = new Client();
+      let hasResolved = false;
 
       conn
         .on("ready", () => {
@@ -277,21 +290,53 @@ export class SSHAdapter {
                 return reject(new Error(`PTY shell allocation failed: ${err.message}`));
               }
 
-              this.activeSessions.set(sessionId, {
+              const session: InteractiveShellSession = {
                 sessionId,
                 serverId: server.id,
                 client: conn,
                 stream,
                 createdAt: Date.now(),
                 lastActiveAt: Date.now(),
+                onData: options.onData,
+                onClose: options.onClose,
+                onError: options.onError,
+              };
+
+              this.activeSessions.set(sessionId, session);
+
+              stream.on("data", (chunk: Buffer) => {
+                const s = this.activeSessions.get(sessionId);
+                if (s) {
+                  s.lastActiveAt = Date.now();
+                }
+                options.onData?.(chunk);
               });
 
+              stream.on("close", (code?: number) => {
+                options.onClose?.(code);
+                this.closeSession(sessionId);
+              });
+
+              stream.on("error", (streamErr: Error) => {
+                options.onError?.(streamErr);
+                this.closeSession(sessionId);
+              });
+
+              hasResolved = true;
               resolve({ sessionId, serverId: server.id });
             }
           );
         })
         .on("error", (err) => {
-          reject(new Error(`SSH interactive connection failed: ${err.message}`));
+          if (!hasResolved) {
+            reject(new Error(`SSH interactive connection failed: ${err.message}`));
+          } else {
+            options.onError?.(err);
+            this.closeSession(sessionId);
+          }
+        })
+        .on("close", () => {
+          this.closeSession(sessionId);
         })
         .connect(this.getConnectConfig(server, credentials));
     });
@@ -328,17 +373,73 @@ export class SSHAdapter {
   }
 
   /**
+   * Pause stream reading (for backpressure handling)
+   */
+  static pauseStream(sessionId: string): boolean {
+    const session = this.activeSessions.get(sessionId);
+    if (!session || !session.stream) return false;
+    try {
+      session.stream.pause();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Resume stream reading (after client drains)
+   */
+  static resumeStream(sessionId: string): boolean {
+    const session = this.activeSessions.get(sessionId);
+    if (!session || !session.stream) return false;
+    try {
+      session.stream.resume();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Retrieve active session reference
+   */
+  static getSession(sessionId: string): InteractiveShellSession | undefined {
+    return this.activeSessions.get(sessionId);
+  }
+
+  /**
    * Close active interactive session and terminate underlying client
    */
   static closeSession(sessionId: string): void {
     const session = this.activeSessions.get(sessionId);
     if (session) {
-      try {
-        session.stream.end();
-        session.client.end();
-      } catch {}
       this.activeSessions.delete(sessionId);
+      try {
+        session.stream.removeAllListeners();
+        session.stream.end();
+        session.stream.destroy();
+      } catch {}
+      try {
+        session.client.removeAllListeners();
+        session.client.end();
+        session.client.destroy();
+      } catch {}
     }
+  }
+
+  /**
+   * Reaper for inactive/idle interactive sessions
+   */
+  static cleanIdleSessions(maxIdleMs: number = 900000): number {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [id, session] of this.activeSessions.entries()) {
+      if (now - session.lastActiveAt > maxIdleMs) {
+        this.closeSession(id);
+        cleaned++;
+      }
+    }
+    return cleaned;
   }
 
   static getActiveSessionCount(): number {

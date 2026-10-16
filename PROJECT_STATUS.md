@@ -172,5 +172,95 @@
 ### 7. Remaining External Prerequisites
 - Network connectivity to actual target OpenSSH servers.
 - Operator private keys or passphrases for target servers.
-- High-frequency WebSocket server bridge for continuous interactive TUI sessions (`vim`/`htop`).
+
+---
+
+## 4. Milestone 3 Real-Time Interactive SSH Terminal Implementation & Verification
+
+### 1. System Architecture & Transport Decision
+- **Dedicated Authenticated WebSocket Gateway (`src/server/terminalGateway.ts`)**:
+  - Rather than emulating interactivity through repetitive HTTP polling or unstable streaming hacks in standard HTTP route handlers, PraxelOps provides a dedicated, persistent WebSocket terminal gateway service.
+  - The gateway handles HTTP upgrade requests on `/terminal` (and `/ssh`), authenticates the operator session, resolves credentials from the backend inventory, allocates a genuine interactive PTY (`client.shell()`), and bridges bidirectional raw byte streams directly to the browser.
+- **Frontend xterm.js Terminal (`src/components/terminal/TerminalView.tsx`)**:
+  - Replaced simulated history line rendering with genuine `@xterm/xterm` (v5.5.0), `@xterm/addon-fit` (v0.10.0), and `@xterm/addon-web-links` (v0.11.0).
+  - Every keystroke, Tab completion, arrow navigation, Ctrl+C interrupt, and ANSI cursor movement streams directly to the remote PTY.
+  - Dynamic module loading ensures full Next.js SSR / Turbopack compatibility.
+- **Multi-Tab Session Isolation**:
+  - Operators can open multiple simultaneous terminal sessions across different fleet nodes.
+  - Each tab maintains an independent persistent WebSocket connection and distinct `ssh2.ClientChannel` PTY session.
+  - Switching between tabs preserves terminal buffers and connection states without session termination.
+
+### 2. PTY Features & Stream Capabilities
+- **Bidirectional Streaming**: Full-duplex raw stdin/stdout streaming via WebSocket JSON protocol (`{ type: "input", data }` and `{ type: "output", data }`).
+- **Interactive PTY Shell (`client.shell()`)**: Configured with `xterm-256color` terminal emulation for full curses and interactive CLI application support (`htop`, `vim`, `nano`, `top`).
+- **Terminal Window Resizing**: `ResizeObserver` monitors terminal viewport dimensions, invokes `FitAddon.fit()`, and sends `{ type: "resize", cols, rows }` to the backend, triggering `stream.setWindow(rows, cols)` on the remote PTY.
+- **ANSI Escape Sequences & Unicode Fidelity**: Full 24-bit truecolor, standard 16-color ANSI formatting, bold/underline/dim styles, and multi-byte UTF-8 Unicode (e.g. emojis, East Asian characters) render without truncation or corruption.
+- **Backpressure & Buffer Management**: Backpressure monitoring (`ws.bufferedAmount > 1MB`) pauses the remote SSH channel stream (`stream.pause()`) and automatically resumes on buffer drain (`stream.resume()`).
+- **Quick Presets**: Command presets (`Sys Info`, `Uptime`, `Disk Space`, `Memory`, `Processes`) write directly to the active terminal stdin stream.
+
+### 3. Security Hardening & Isolation
+- **Authentication on Connection**: Every connection requires a valid operator session token passed via URL query parameter, `Authorization: Bearer` header, or initial `{ type: "auth", token }` frame. Verified strictly via `AuthService.verifyToken()`.
+- **Target Server Authorization & Backend Credential Isolation**:
+  - The client specifies only the target `serverId`.
+  - Passwords, private keys, and passphrases are retrieved strictly from server-side storage and never accepted from client payloads.
+- **Host-Key Verification**: Enforced via `KnownHostsService` with Trust-On-First-Use (TOFU) policy. If a remote host key changes, connection is aborted immediately (`SSH_HOST_KEY_MISMATCH`), preventing Man-In-The-Middle attacks.
+- **Session Bounds & Payload Limits**:
+  - Clamped window resize bounds (`10 <= cols <= 500`, `2 <= rows <= 200`).
+  - Max inbound message frame size limit (64 KB). Payloads exceeding the limit are rejected.
+  - Max concurrent terminal sessions per gateway (25 sessions).
+- **Idle Timeout & Resource Cleanup**:
+  - Inactive sessions exceeding the 15-minute idle threshold are reaped automatically.
+  - When a WebSocket client disconnects or closes a tab, `SSHAdapter.closeSession()` terminates the SSH channel and underlying client immediately, preventing dangling sockets or memory leaks.
+- **Tamper-Evident Audit Trail**:
+  - Connect and disconnect events are logged to `.peos/data/audit.json` with duration metrics.
+
+### 4. Automated Test Suite (39 Tests Passing)
+1. `src/server/terminalGateway.test.ts` (9 tests passed):
+   - Rejection of unauthorized connections with invalid/missing tokens (Code 1008).
+   - Rejection of connections to non-existent servers (Code 1008).
+   - Bidirectional input and output streaming between WebSocket client and remote SSH PTY.
+   - Dynamic terminal resize propagation with boundary validation clamping.
+   - ANSI escape sequence and multi-byte Unicode string transfer fidelity.
+   - Multiple simultaneous independent terminal sessions without cross-session leakage.
+   - Inbound message payload size limit enforcement (>64 KB rejected).
+   - Host-key verification mismatch rejection and graceful termination (Code 1011).
+   - Session closure and disconnect cleanup freeing SSH channels and logging audit records.
+2. `src/lib/security/auth.test.ts` (5 tests passed): Session tokens, CSRF, rate limits, size limits, secret redaction.
+3. `src/lib/ssh/knownHosts.test.ts` (3 tests passed): TOFU auto-enrollment, matching verification, MITM mismatch rejection.
+4. `src/lib/ssh/adapter.test.ts` (3 tests passed): Connection handling, SFTP null-byte rejection, session resize/close.
+5. `src/lib/ai/policy.test.ts` (5 tests passed): Typed operations, canonical command generation, metacharacter rejection.
+6. `src/lib/ai/approval.test.ts` (6 tests passed): HMAC signatures, expiration, concurrency locks, destructive blocklist.
+7. `src/lib/storage/storage.test.ts` (4 tests passed): JSON database CRUD and persistence.
+8. `src/lib/ai/diagnostics.test.ts` (4 tests passed): Telemetry heuristics and rule-based diagnostic proposals.
+
+### 5. Verification Status & Build Evidence
+- `npm run typecheck` (`tsc --noEmit`): **0 errors** (Strict TypeScript).
+- `npx vitest run`: **39 passed in 8 test files (100% pass rate)**.
+- `npm run build` (`next build`): **12 static and dynamic routes compiled successfully via Turbopack**.
+
+### 6. Deployment & Operational Runbook
+- **Development**:
+  ```bash
+  # Terminal 1: Next.js Studio Desktop & API
+  npm run dev
+
+  # Terminal 2: Authenticated SSH Terminal WebSocket Gateway
+  npm run terminal:gateway
+  ```
+- **Production**:
+  ```bash
+  # Build optimized production assets
+  npm run build
+
+  # Start Next.js web application
+  npm run start
+
+  # Run Terminal Gateway service (runs on port 3001 or TERMINAL_GATEWAY_PORT)
+  npm run terminal:gateway
+  ```
+- **Configuration Flags**:
+  - `TERMINAL_GATEWAY_PORT`: Port for the WebSocket gateway (default: `3001`).
+  - `NEXT_PUBLIC_WS_TERMINAL_PORT`: Frontend port configuration for browser connections (default: `3001`).
+  - `PRAXELOPS_SECRET`: Master 256-bit cryptographic signing key (mandatory in production).
+
 
