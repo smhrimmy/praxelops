@@ -1,9 +1,0 @@
-{
-  "192.168.1.100:22": {
-    "host": "192.168.1.100",
-    "port": 22,
-    "fingerprint": "SHA256:d3lHN/YypWE4VWJdUYdUW6gC9cxSn8vEbPM5yqgU1Aw=",
-    "firstSeenAt": "2026-10-16T18:11:41.022Z",
-    "lastVerifiedAt": "2026-10-16T18:11:41.022Z"
-  }
-}

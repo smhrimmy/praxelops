@@ -42,3 +42,8 @@ next-env.d.ts
 .peos/data/tickets/
 .peos/data/test_tickets*/
 
+.peos/data/*.lock
+.peos/data/*.tmp
+
+# Runtime data (servers, audit, known hosts, tickets) is local state, never committed
+.peos/data/

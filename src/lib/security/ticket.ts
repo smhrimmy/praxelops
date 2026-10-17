@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { getDataDir } from "../storage/dataDir";
 
 export interface WebSocketTicket {
   ticket: string;
@@ -23,9 +24,6 @@ export interface ConsumeTicketOptions {
   expectedPurpose?: string;
 }
 
-const DEFAULT_DATA_DIR = path.resolve(process.cwd(), ".peos", "data");
-const DEFAULT_TICKETS_DIR = path.join(DEFAULT_DATA_DIR, "tickets");
-
 function normalizeOrigin(origin: string): string {
   try {
     const u = new URL(origin);
@@ -44,13 +42,13 @@ export class TicketService {
   }
 
   static getStorageDir(): string {
-    return this.customTicketsDir || DEFAULT_TICKETS_DIR;
+    return this.customTicketsDir || path.join(getDataDir(), "tickets");
   }
 
   private static ensureTicketsDir(): string {
     const dir = this.getStorageDir();
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
     return dir;
   }
@@ -100,7 +98,11 @@ export class TicketService {
     const ticketsDir = this.ensureTicketsDir();
     const filePath = path.join(ticketsDir, `${ticket}.json`);
     try {
-      fs.writeFileSync(filePath, JSON.stringify(ticketObj, null, 2), "utf-8");
+      fs.writeFileSync(filePath, JSON.stringify(ticketObj, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+        flag: "wx",
+      });
     } catch (err) {
       console.error("[TicketService] Failed to persist ticket to shared store:", err);
     }

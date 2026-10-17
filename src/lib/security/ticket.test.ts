@@ -1,17 +1,11 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import fs from "fs";
 import { TicketService } from "./ticket";
-import path from "path";
 
 describe("TicketService", () => {
-  const testDir = path.resolve(process.cwd(), ".peos", "data", "test_tickets_unit");
-
-  beforeAll(() => {
-    TicketService.setStorageDir(testDir);
-  });
-
+  // Tickets live under the per-test-file PRAXELOPS_DATA_DIR (see src/test/setupDataDir.ts).
   afterAll(() => {
     TicketService.clear();
-    TicketService.setStorageDir(null);
   });
 
   beforeEach(() => {
@@ -99,7 +93,7 @@ describe("TicketService", () => {
 
     // Simulate process A shutting down by wiping in-memory Map
     // (mimicking process B starting up or gateway running in a separate process)
-    (TicketService as any).tickets.clear();
+    (TicketService as unknown as { tickets: Map<string, unknown> }).tickets.clear();
 
     // Process B should successfully consume the ticket from shared disk store
     const consumedInProcessB = TicketService.consumeTicket(t.ticket);
@@ -130,6 +124,17 @@ describe("TicketService", () => {
     expect(successes.length).toBe(1);
     expect(failures.length).toBe(4);
     expect(successes[0]?.serverId).toBe("srv-race-01");
+  });
+
+  it("stores ticket files inside the configured data dir, not the repo", () => {
+    const t = TicketService.issueTicket("operator-1", "srv-101", 60);
+    const dir = TicketService.getStorageDir();
+    expect(dir.startsWith(process.env.PRAXELOPS_DATA_DIR ?? "<unset>")).toBe(true);
+    expect(fs.existsSync(`${dir}/${t.ticket}.json`)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(`${dir}/${t.ticket}.json`).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    }
   });
 
   it("rejects expired tickets", () => {

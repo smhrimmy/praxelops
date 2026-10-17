@@ -4,34 +4,79 @@ import { ServerHost } from "@/types/server";
 import { AuditEvent } from "@/types/audit";
 import { AIOperationProposal, ServerDiagnosticReport } from "@/types/ai";
 import { DeploymentWorkflow } from "@/types/deployment";
-
-const DATA_DIR = path.resolve(process.cwd(), ".peos", "data");
+import { getDataDir } from "./dataDir";
+import {
+  atomicWriteFileSync,
+  readJsonStrict,
+  StorageCorruptError,
+  withFileLockSync,
+} from "./atomicFile";
 
 function ensureDirectoryExists(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+}
+
+function resolveStorePath(filename: string): string {
+  const dir = getDataDir();
+  ensureDirectoryExists(dir);
+  return path.join(dir, filename);
+}
+
+/**
+ * Reads a store without taking the lock. Safe because writes are atomic renames.
+ * Returns undefined when the file does not exist yet.
+ * Throws StorageCorruptError (never a default) on unparseable or wrong-shaped contents.
+ */
+function readExisting<T>(filePath: string, defaultValue: T): T | undefined {
+  const parsed = readJsonStrict<T>(filePath);
+  if (parsed === undefined) return undefined;
+  if (Array.isArray(defaultValue) !== Array.isArray(parsed) || parsed === null) {
+    throw new StorageCorruptError(filePath, "unexpected JSON shape");
   }
+  return parsed;
+}
+
+/** Must be called while holding the lock for filePath. */
+function readOrInitLocked<T>(filePath: string, defaultValue: T): T {
+  const existing = readExisting(filePath, defaultValue);
+  if (existing !== undefined) return existing;
+  atomicWriteFileSync(filePath, JSON.stringify(defaultValue, null, 2));
+  return defaultValue;
 }
 
 function readJsonFile<T>(filename: string, defaultValue: T): T {
-  ensureDirectoryExists(DATA_DIR);
-  const filePath = path.join(DATA_DIR, filename);
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, JSON.stringify(defaultValue, null, 2), "utf-8");
-    return defaultValue;
-  }
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return defaultValue;
-  }
+  const filePath = resolveStorePath(filename);
+  const existing = readExisting(filePath, defaultValue);
+  if (existing !== undefined) return existing;
+  // Missing: create the default under the lock, re-checking so we never clobber a concurrent first write.
+  return withFileLockSync(filePath, () => readOrInitLocked(filePath, defaultValue));
 }
 
 function writeJsonFile<T>(filename: string, data: T): void {
-  ensureDirectoryExists(DATA_DIR);
-  const filePath = path.join(DATA_DIR, filename);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  const filePath = resolveStorePath(filename);
+  withFileLockSync(filePath, () => {
+    atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
+  });
+}
+
+/**
+ * Locked read-modify-write. The mutator receives the current contents (re-read inside the lock)
+ * and returns the next contents (or null to skip the write) plus a result to hand back.
+ */
+function updateJsonFile<T, R>(
+  filename: string,
+  defaultValue: T,
+  mutate: (current: T) => { next: T | null; result: R }
+): R {
+  const filePath = resolveStorePath(filename);
+  return withFileLockSync(filePath, () => {
+    const current = readOrInitLocked(filePath, defaultValue);
+    const { next, result } = mutate(current);
+    if (next !== null) {
+      atomicWriteFileSync(filePath, JSON.stringify(next, null, 2));
+    }
+    return result;
+  });
 }
 
 export class StorageService {
@@ -48,24 +93,25 @@ export class StorageService {
   }
 
   static saveServer(server: ServerHost): void {
-    const servers = this.getServers();
-    const index = servers.findIndex((s) => s.id === server.id);
-    if (index >= 0) {
-      servers[index] = server;
-    } else {
-      servers.push(server);
-    }
-    writeJsonFile("servers.json", servers);
+    updateJsonFile<ServerHost[], void>("servers.json", [], (servers) => {
+      const index = servers.findIndex((s) => s.id === server.id);
+      if (index >= 0) {
+        servers[index] = server;
+      } else {
+        servers.push(server);
+      }
+      return { next: servers, result: undefined };
+    });
   }
 
   static deleteServer(id: string): boolean {
-    const servers = this.getServers();
-    const filtered = servers.filter((s) => s.id !== id);
-    if (filtered.length !== servers.length) {
-      writeJsonFile("servers.json", filtered);
-      return true;
-    }
-    return false;
+    return updateJsonFile<ServerHost[], boolean>("servers.json", [], (servers) => {
+      const filtered = servers.filter((s) => s.id !== id);
+      if (filtered.length !== servers.length) {
+        return { next: filtered, result: true };
+      }
+      return { next: null, result: false };
+    });
   }
 
   /**
@@ -121,18 +167,18 @@ export class StorageService {
   }
 
   static logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): AuditEvent {
-    const events = this.getAuditEvents();
     const newEvent: AuditEvent = {
       ...event,
       id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       timestamp: new Date().toISOString(),
     };
-    events.unshift(newEvent);
-    if (events.length > 2000) {
-      events.length = 2000;
-    }
-    writeJsonFile("audit.json", events);
-    return newEvent;
+    return updateJsonFile<AuditEvent[], AuditEvent>("audit.json", [], (events) => {
+      events.unshift(newEvent);
+      if (events.length > 2000) {
+        events.length = 2000;
+      }
+      return { next: events, result: newEvent };
+    });
   }
 
   // AI Proposals & Diagnostic Reports
@@ -141,14 +187,15 @@ export class StorageService {
   }
 
   static saveProposal(proposal: AIOperationProposal): void {
-    const proposals = this.getProposals();
-    const index = proposals.findIndex((p) => p.id === proposal.id);
-    if (index >= 0) {
-      proposals[index] = proposal;
-    } else {
-      proposals.unshift(proposal);
-    }
-    writeJsonFile("proposals.json", proposals);
+    updateJsonFile<AIOperationProposal[], void>("proposals.json", [], (proposals) => {
+      const index = proposals.findIndex((p) => p.id === proposal.id);
+      if (index >= 0) {
+        proposals[index] = proposal;
+      } else {
+        proposals.unshift(proposal);
+      }
+      return { next: proposals, result: undefined };
+    });
   }
 
   static getProposalById(id: string): AIOperationProposal | undefined {
@@ -160,10 +207,11 @@ export class StorageService {
   }
 
   static saveDiagnostic(report: ServerDiagnosticReport): void {
-    const list = this.getDiagnostics();
-    list.unshift(report);
-    if (list.length > 100) list.length = 100;
-    writeJsonFile("diagnostics.json", list);
+    updateJsonFile<ServerDiagnosticReport[], void>("diagnostics.json", [], (list) => {
+      list.unshift(report);
+      if (list.length > 100) list.length = 100;
+      return { next: list, result: undefined };
+    });
   }
 
   // Deployments
@@ -172,13 +220,14 @@ export class StorageService {
   }
 
   static saveDeployment(deployment: DeploymentWorkflow): void {
-    const list = this.getDeployments();
-    const index = list.findIndex((d) => d.id === deployment.id);
-    if (index >= 0) {
-      list[index] = deployment;
-    } else {
-      list.unshift(deployment);
-    }
-    writeJsonFile("deployments.json", list);
+    updateJsonFile<DeploymentWorkflow[], void>("deployments.json", [], (list) => {
+      const index = list.findIndex((d) => d.id === deployment.id);
+      if (index >= 0) {
+        list[index] = deployment;
+      } else {
+        list.unshift(deployment);
+      }
+      return { next: list, result: undefined };
+    });
   }
 }
