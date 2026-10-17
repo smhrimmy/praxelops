@@ -156,7 +156,8 @@ describe("auth routes", () => {
       for (let i = 0; i < 4; i++) {
         expect((await loginPost(loginRequest({ username, password: `wrong again ${i} xx` }))).status).toBe(401);
       }
-    });
+      // Nine full-cost scrypt verifications in sequence; allow headroom under parallel test load.
+    }, 30_000);
   });
 
   describe("GET /api/auth/session", () => {
