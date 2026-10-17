@@ -12,6 +12,8 @@ export interface TestSshServerOptions {
   username?: string;
   password?: string;
   hostKeyPem?: string;
+  /** Fixed listen port (default 0 = ephemeral). Lets tests restart a server on the same port. */
+  port?: number;
 }
 
 export function generateTestRsaKey(): string {
@@ -188,7 +190,7 @@ export function startTestSshServer(options: TestSshServerOptions = {}): Promise<
       }
     );
 
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(options.port ?? 0, "127.0.0.1", () => {
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
       resolve({
