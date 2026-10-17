@@ -342,11 +342,33 @@ describe("TerminalGateway WebSocket Transport", () => {
 
     client.send(giantPayload);
 
-    const errMsg = await client.nextMessage();
-    expect(errMsg.type).toBe("error");
-    expect(errMsg.error).toContain("Message exceeds maximum size");
+    // ws itself enforces maxPayload (64 KiB) and closes with 1009 (Message Too Big)
+    expect(await client.waitForClose()).toBe(1009);
+    await vi.waitFor(() => expect(gateway.getActiveSessionCount()).toBe(0));
+  });
 
-    client.close();
+  it("applies the app-level byte limit (not UTF-16 length) when maxMessageBytes is configured lower", async () => {
+    vi.spyOn(SSHAdapter, "createInteractiveSession").mockResolvedValue({
+      sessionId: "test-sess",
+      serverId: mockServer.id,
+    });
+    const gw = new TerminalGateway({ port: 0, maxMessageBytes: 200 });
+    const p = await gw.listen();
+    try {
+      const t = TicketService.issueTicket("test-operator", mockServer.id, { ttlSeconds: 60, purpose: "terminal_shell" });
+      const client = new TestClient(`ws://127.0.0.1:${p}/terminal?ticket=${encodeURIComponent(t.ticket)}`);
+      await client.waitForOpen();
+      await client.nextMessage(); // connected
+
+      // 100 chars but 300 bytes in UTF-8 (3 bytes each) -> must be refused
+      client.send(JSON.stringify({ type: "input", data: "€".repeat(100) }));
+      const errMsg = await client.nextMessage();
+      expect(errMsg.type).toBe("error");
+      expect(errMsg.error).toContain("Message exceeds maximum size");
+      client.close();
+    } finally {
+      await gw.close();
+    }
   });
 
   it("rejects connection and cleans up when SSH host-key verification fails", async () => {
@@ -490,8 +512,8 @@ describe("TerminalGateway WebSocket Transport", () => {
     expect(getGatewayStartupError({ NODE_ENV: "development" })).toBeNull();
   });
 
-  it("validates client IP from X-Forwarded-For only when peer is a trusted proxy", () => {
-    const gw = new TerminalGateway();
+  it("validates client IP from X-Forwarded-For only when peer is a trusted proxy", async () => {
+    const gw = new TerminalGateway({ port: 0 });
 
     // From untrusted remote IP: X-Forwarded-For is ignored
     const untrustedReq = {
@@ -500,12 +522,14 @@ describe("TerminalGateway WebSocket Transport", () => {
     } as any;
     expect(gw.getClientIp(untrustedReq)).toBe("203.0.113.195");
 
-    // From trusted loopback proxy (127.0.0.1): X-Forwarded-For is extracted
+    // From trusted loopback proxy (127.0.0.1): the list is walked from the RIGHT and the first
+    // untrusted hop wins (10.0.0.1 is not a trusted proxy here, so it is the client as seen by the proxy)
     const trustedReq = {
       socket: { remoteAddress: "127.0.0.1" },
       headers: { "x-forwarded-for": "198.51.100.2, 10.0.0.1" },
     } as any;
-    expect(gw.getClientIp(trustedReq)).toBe("198.51.100.2");
+    expect(gw.getClientIp(trustedReq)).toBe("10.0.0.1");
+    await gw.close();
   });
 });
 
