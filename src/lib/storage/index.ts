@@ -1,116 +1,70 @@
-import fs from "fs";
-import path from "path";
-import { ServerHost } from "@/types/server";
-import { AuditEvent } from "@/types/audit";
-import { AIOperationProposal, ServerDiagnosticReport } from "@/types/ai";
-import { DeploymentWorkflow } from "@/types/deployment";
-import { getDataDir } from "./dataDir";
+import crypto from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import type { ServerHost } from "@/types/server";
+import type { AuditEvent } from "@/types/audit";
+import type { AIOperationProposal, ServerDiagnosticReport } from "@/types/ai";
+import type { DeploymentWorkflow } from "@/types/deployment";
+// NOTE: only `import type` for "@/..." aliases and relative .ts imports for values, so plain node
+// (`--experimental-strip-types`, used by the multi-process test fixtures) can load this module.
+import { getDb, prepare, withTransaction } from "../db/database.ts";
 import {
-  atomicWriteFileSync,
-  readJsonStrict,
-  StorageCorruptError,
-  withFileLockSync,
-} from "./atomicFile";
+  AUDIT_INSERT_SQL,
+  auditToParams,
+  docString,
+  rowToAudit,
+  rowToDoc,
+  rowToServer,
+  serverToRow,
+  type SqlRow,
+} from "../db/records.ts";
 
-function ensureDirectoryExists(dirPath: string): void {
-  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+const MAX_DIAGNOSTICS = 100;
+
+const UPSERT_SERVER_SQL =
+  "INSERT INTO servers (id, data, password, private_key, passphrase) VALUES (?, ?, ?, ?, ?) " +
+  "ON CONFLICT(id) DO UPDATE SET data = excluded.data, password = excluded.password, " +
+  "private_key = excluded.private_key, passphrase = excluded.passphrase";
+
+export interface AuditQueryOptions {
+  /** Only events whose targetServerId equals this. */
+  serverId?: string;
+  /** Maximum number of events to return (newest first). Omitted = all. */
+  limit?: number;
+  offset?: number;
 }
 
-function resolveStorePath(filename: string): string {
-  const dir = getDataDir();
-  ensureDirectoryExists(dir);
-  return path.join(dir, filename);
-}
-
-/**
- * Reads a store without taking the lock. Safe because writes are atomic renames.
- * Returns undefined when the file does not exist yet.
- * Throws StorageCorruptError (never a default) on unparseable or wrong-shaped contents.
- */
-function readExisting<T>(filePath: string, defaultValue: T): T | undefined {
-  const parsed = readJsonStrict<T>(filePath);
-  if (parsed === undefined) return undefined;
-  if (Array.isArray(defaultValue) !== Array.isArray(parsed) || parsed === null) {
-    throw new StorageCorruptError(filePath, "unexpected JSON shape");
-  }
-  return parsed;
-}
-
-/** Must be called while holding the lock for filePath. */
-function readOrInitLocked<T>(filePath: string, defaultValue: T): T {
-  const existing = readExisting(filePath, defaultValue);
-  if (existing !== undefined) return existing;
-  atomicWriteFileSync(filePath, JSON.stringify(defaultValue, null, 2));
-  return defaultValue;
-}
-
-function readJsonFile<T>(filename: string, defaultValue: T): T {
-  const filePath = resolveStorePath(filename);
-  const existing = readExisting(filePath, defaultValue);
-  if (existing !== undefined) return existing;
-  // Missing: create the default under the lock, re-checking so we never clobber a concurrent first write.
-  return withFileLockSync(filePath, () => readOrInitLocked(filePath, defaultValue));
-}
-
-function writeJsonFile<T>(filename: string, data: T): void {
-  const filePath = resolveStorePath(filename);
-  withFileLockSync(filePath, () => {
-    atomicWriteFileSync(filePath, JSON.stringify(data, null, 2));
-  });
-}
-
-/**
- * Locked read-modify-write. The mutator receives the current contents (re-read inside the lock)
- * and returns the next contents (or null to skip the write) plus a result to hand back.
- */
-function updateJsonFile<T, R>(
-  filename: string,
-  defaultValue: T,
-  mutate: (current: T) => { next: T | null; result: R }
-): R {
-  const filePath = resolveStorePath(filename);
-  return withFileLockSync(filePath, () => {
-    const current = readOrInitLocked(filePath, defaultValue);
-    const { next, result } = mutate(current);
-    if (next !== null) {
-      atomicWriteFileSync(filePath, JSON.stringify(next, null, 2));
-    }
-    return result;
-  });
+function upsertServer(db: DatabaseSync, server: ServerHost): void {
+  const row = serverToRow(server);
+  prepare(db, UPSERT_SERVER_SQL).run(row.id, row.data, row.password, row.privateKey, row.passphrase);
 }
 
 export class StorageService {
   /**
-   * Returns servers from persistent storage.
+   * Returns servers from persistent storage (insertion order).
    * NEVER injects hardcoded fake servers into normal production state.
    */
   static getServers(): ServerHost[] {
-    return readJsonFile<ServerHost[]>("servers.json", []);
+    const db = getDb();
+    const rows = prepare(db, "SELECT id, data, password, private_key, passphrase FROM servers ORDER BY rowid").all();
+    return rows.map((row) => rowToServer(row as SqlRow));
   }
 
   static getServerById(id: string): ServerHost | undefined {
-    return this.getServers().find((s) => s.id === id);
+    const db = getDb();
+    const row = prepare(db, "SELECT id, data, password, private_key, passphrase FROM servers WHERE id = ?").get(id);
+    return row === undefined ? undefined : rowToServer(row as SqlRow);
   }
 
   static saveServer(server: ServerHost): void {
-    updateJsonFile<ServerHost[], void>("servers.json", [], (servers) => {
-      const index = servers.findIndex((s) => s.id === server.id);
-      if (index >= 0) {
-        servers[index] = server;
-      } else {
-        servers.push(server);
-      }
-      return { next: servers, result: undefined };
+    withTransaction((db) => {
+      upsertServer(db, server);
     });
   }
 
   static deleteServer(id: string): boolean {
-    return updateJsonFile<ServerHost[], boolean>("servers.json", [], (servers) => {
-      const filtered = servers.filter((s) => s.id !== id);
-      if (filtered.length !== servers.length) {
-        return { next: filtered, result: true };
-      }
-      return { next: null, result: false };
+    return withTransaction((db) => {
+      const result = prepare(db, "DELETE FROM servers WHERE id = ?").run(id);
+      return Number(result.changes) > 0;
     });
   }
 
@@ -153,81 +107,120 @@ export class StorageService {
       },
     ];
 
-    writeJsonFile("servers.json", demoServers);
+    withTransaction((db) => {
+      prepare(db, "DELETE FROM servers").run();
+      for (const server of demoServers) upsertServer(db, server);
+    });
     return demoServers;
   }
 
   static clearAllServers(): void {
-    writeJsonFile("servers.json", []);
+    withTransaction((db) => {
+      prepare(db, "DELETE FROM servers").run();
+    });
   }
 
-  // Audit Events
-  static getAuditEvents(): AuditEvent[] {
-    return readJsonFile<AuditEvent[]>("audit.json", []);
+  // Audit Events (append-only; newest first on read; no retention cap)
+  static getAuditEvents(options: AuditQueryOptions = {}): AuditEvent[] {
+    const db = getDb();
+    const limit = options.limit === undefined ? -1 : Math.max(0, Math.floor(options.limit));
+    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const columns =
+      "seq, id, timestamp, actor, event_type, target_server_id, target_server_name, command, status, ip_address, details";
+    const rows =
+      options.serverId === undefined
+        ? prepare(db, `SELECT ${columns} FROM audit_events ORDER BY seq DESC LIMIT ? OFFSET ?`).all(limit, offset)
+        : prepare(
+            db,
+            `SELECT ${columns} FROM audit_events WHERE target_server_id = ? ORDER BY seq DESC LIMIT ? OFFSET ?`
+          ).all(options.serverId, limit, offset);
+    return rows.map((row) => rowToAudit(row as SqlRow));
   }
 
   static logAuditEvent(event: Omit<AuditEvent, "id" | "timestamp">): AuditEvent {
     const newEvent: AuditEvent = {
       ...event,
-      id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      id: `audit-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
       timestamp: new Date().toISOString(),
     };
-    return updateJsonFile<AuditEvent[], AuditEvent>("audit.json", [], (events) => {
-      events.unshift(newEvent);
-      if (events.length > 2000) {
-        events.length = 2000;
-      }
-      return { next: events, result: newEvent };
+    withTransaction((db) => {
+      prepare(db, AUDIT_INSERT_SQL).run(...auditToParams(newEvent));
     });
+    return newEvent;
   }
 
-  // AI Proposals & Diagnostic Reports
+  // AI Proposals & Diagnostic Reports (newest-created first; updates keep their position)
   static getProposals(): AIOperationProposal[] {
-    return readJsonFile<AIOperationProposal[]>("proposals.json", []);
+    const db = getDb();
+    const rows = prepare(db, "SELECT id, data FROM proposals ORDER BY rowid DESC").all();
+    return rows.map((row) => rowToDoc<AIOperationProposal>(row as SqlRow, "proposals", String(row.id)));
   }
 
   static saveProposal(proposal: AIOperationProposal): void {
-    updateJsonFile<AIOperationProposal[], void>("proposals.json", [], (proposals) => {
-      const index = proposals.findIndex((p) => p.id === proposal.id);
-      if (index >= 0) {
-        proposals[index] = proposal;
-      } else {
-        proposals.unshift(proposal);
-      }
-      return { next: proposals, result: undefined };
+    withTransaction((db) => {
+      prepare(
+        db,
+        "INSERT INTO proposals (id, target_server_id, status, created_at, data) VALUES (?, ?, ?, ?, ?) " +
+          "ON CONFLICT(id) DO UPDATE SET target_server_id = excluded.target_server_id, status = excluded.status, " +
+          "created_at = excluded.created_at, data = excluded.data"
+      ).run(
+        proposal.id,
+        docString(proposal, "targetServerId"),
+        docString(proposal, "status"),
+        docString(proposal, "createdAt"),
+        JSON.stringify(proposal)
+      );
     });
   }
 
   static getProposalById(id: string): AIOperationProposal | undefined {
-    return this.getProposals().find((p) => p.id === id);
+    const db = getDb();
+    const row = prepare(db, "SELECT id, data FROM proposals WHERE id = ?").get(id);
+    return row === undefined ? undefined : rowToDoc<AIOperationProposal>(row as SqlRow, "proposals", id);
   }
 
   static getDiagnostics(): ServerDiagnosticReport[] {
-    return readJsonFile<ServerDiagnosticReport[]>("diagnostics.json", []);
+    const db = getDb();
+    const rows = prepare(db, "SELECT seq, data FROM diagnostics ORDER BY seq DESC").all();
+    return rows.map((row) => rowToDoc<ServerDiagnosticReport>(row as SqlRow, "diagnostics", String(row.seq)));
   }
 
   static saveDiagnostic(report: ServerDiagnosticReport): void {
-    updateJsonFile<ServerDiagnosticReport[], void>("diagnostics.json", [], (list) => {
-      list.unshift(report);
-      if (list.length > 100) list.length = 100;
-      return { next: list, result: undefined };
+    withTransaction((db) => {
+      prepare(db, "INSERT INTO diagnostics (id, server_id, timestamp, data) VALUES (?, ?, ?, ?)").run(
+        report.id,
+        docString(report, "serverId"),
+        docString(report, "timestamp"),
+        JSON.stringify(report)
+      );
+      prepare(
+        db,
+        "DELETE FROM diagnostics WHERE seq NOT IN (SELECT seq FROM diagnostics ORDER BY seq DESC LIMIT ?)"
+      ).run(MAX_DIAGNOSTICS);
     });
   }
 
-  // Deployments
+  // Deployments (newest-created first; updates keep their position)
   static getDeployments(): DeploymentWorkflow[] {
-    return readJsonFile<DeploymentWorkflow[]>("deployments.json", []);
+    const db = getDb();
+    const rows = prepare(db, "SELECT id, data FROM deployments ORDER BY rowid DESC").all();
+    return rows.map((row) => rowToDoc<DeploymentWorkflow>(row as SqlRow, "deployments", String(row.id)));
   }
 
   static saveDeployment(deployment: DeploymentWorkflow): void {
-    updateJsonFile<DeploymentWorkflow[], void>("deployments.json", [], (list) => {
-      const index = list.findIndex((d) => d.id === deployment.id);
-      if (index >= 0) {
-        list[index] = deployment;
-      } else {
-        list.unshift(deployment);
-      }
-      return { next: list, result: undefined };
+    withTransaction((db) => {
+      prepare(
+        db,
+        "INSERT INTO deployments (id, server_id, status, created_at, data) VALUES (?, ?, ?, ?, ?) " +
+          "ON CONFLICT(id) DO UPDATE SET server_id = excluded.server_id, status = excluded.status, " +
+          "created_at = excluded.created_at, data = excluded.data"
+      ).run(
+        deployment.id,
+        docString(deployment, "serverId"),
+        docString(deployment, "status"),
+        docString(deployment, "createdAt"),
+        JSON.stringify(deployment)
+      );
     });
   }
 }

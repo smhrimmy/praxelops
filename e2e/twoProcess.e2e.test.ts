@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from "vitest";
@@ -86,10 +87,6 @@ function sshFingerprint(hostKeyPem: string): string {
   if (!key || key instanceof Error) throw new Error("Unable to parse SSH host key");
   // Same derivation as KnownHostsService.computeFingerprint over the public key blob.
   return "SHA256:" + crypto.createHash("sha256").update(key.getPublicSSH()).digest("base64");
-}
-
-function readJsonFile(file: string): unknown {
-  return JSON.parse(fs.readFileSync(file, "utf-8"));
 }
 
 function childEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
@@ -522,32 +519,71 @@ interface AuditRecord {
   details?: Record<string, unknown>;
 }
 
+const DB_FILENAME = "praxelops.db";
+
+/** Opens the shared SQLite database (WAL, same file the web app and the gateway use) for one inspection. */
+function withDb<T>(fn: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(path.join(dataDir, DB_FILENAME));
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
 function readAudit(): AuditRecord[] {
-  const raw = readJsonFile(path.join(dataDir, "audit.json"));
+  const rows = withDb((db) => db.prepare("SELECT event_type, status, details FROM audit_events ORDER BY seq DESC").all());
   return z
     .array(
       z.object({
-        eventType: z.string(),
+        event_type: z.string(),
         status: z.string(),
-        details: z.record(z.string(), z.unknown()).optional(),
+        details: z.string().nullable(),
       })
     )
-    .parse(raw);
+    .parse(rows)
+    .map((row) => ({
+      eventType: row.event_type,
+      status: row.status,
+      details: row.details === null ? undefined : z.record(z.string(), z.unknown()).parse(JSON.parse(row.details)),
+    }));
+}
+
+/** Raw bytes of the database file and its write-ahead log (committed data may still live only in the WAL). */
+function rawDatabaseBytes(): string {
+  const base = path.join(dataDir, DB_FILENAME);
+  return [base, `${base}-wal`]
+    .filter((file) => fs.existsSync(file))
+    .map((file) => fs.readFileSync(file).toString("latin1"))
+    .join(" ");
 }
 
 function assertAuditHasNoSecrets(): void {
-  const rawAudit = fs.readFileSync(path.join(dataDir, "audit.json"), "utf-8");
+  const rawAudit = JSON.stringify(
+    withDb((db) => db.prepare("SELECT * FROM audit_events").all())
+  );
   expect(rawAudit).not.toContain(sshPassword);
   expect(rawAudit).not.toContain(operatorPassword);
   for (const ticket of issuedTickets) {
     expect(rawAudit).not.toContain(ticket);
   }
+
+  // Whole-file scan (database + WAL). The operator's plaintext password is never stored, and tickets are stored
+  // only as digests, so neither may appear anywhere. The SSH password is deliberately NOT scanned here: until
+  // Milestone 7 step 2 encrypts credentials it lives (by design) in the servers.password column.
+  const raw = rawDatabaseBytes();
+  expect(raw.length).toBeGreaterThan(0);
+  expect(raw).not.toContain(operatorPassword);
+  for (const ticket of issuedTickets) {
+    expect(raw).not.toContain(ticket);
+  }
 }
 
 function readPins(): Record<string, { fingerprint: string }> {
-  return z
-    .record(z.string(), z.object({ fingerprint: z.string() }).passthrough())
-    .parse(readJsonFile(path.join(dataDir, "known_hosts.json")));
+  const rows = withDb((db) => db.prepare("SELECT host_port, fingerprint FROM known_hosts").all());
+  const parsed = z.array(z.object({ host_port: z.string(), fingerprint: z.string() })).parse(rows);
+  return Object.fromEntries(parsed.map((row) => [row.host_port, { fingerprint: row.fingerprint }]));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -806,7 +842,7 @@ describe("production topology: next start + terminal gateway as separate OS proc
     await loginAndStoreSession();
     expect(cookie).not.toBe(oldCookie);
 
-    // Persistent state (servers.json) survived the restart.
+    // Persistent state (the servers table) survived the restart.
     const listed = await httpRequest({ port: webPort, path: "/api/servers", headers: { Cookie: `${SESSION_COOKIE}=${cookie}` } });
     expect(listed.status).toBe(200);
     expect(ServersListResponse.parse(parseJson(listed.text)).data.map((s) => s.id)).toContain(serverId);

@@ -3,7 +3,8 @@
 //   node --experimental-strip-types scripts/create-operator.ts <username> [--reset]
 //
 // The password is read from PRAXELOPS_OPERATOR_PASSWORD, or prompted for (echo off) on a TTY.
-// Accounts are stored in <data dir>/operators.json (PRAXELOPS_DATA_DIR, default ./.peos/data).
+// Accounts are stored in the SQLite database <data dir>/praxelops.db (PRAXELOPS_DATA_DIR, default ./.peos/data).
+// node:sqlite is experimental in Node 24 and prints an ExperimentalWarning (add --no-warnings to hide it).
 //
 // NOTE: relative imports with explicit .ts extensions only; plain node cannot resolve "@/" aliases.
 import {

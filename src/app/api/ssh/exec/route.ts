@@ -4,6 +4,9 @@ import { SSHAdapter } from "@/lib/ssh/adapter";
 import { AuthService } from "@/lib/security/auth";
 import { CommandExecuteSchema } from "@/types/ssh";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);

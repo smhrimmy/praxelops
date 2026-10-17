@@ -1,7 +1,9 @@
-import fs from "fs";
-import path from "path";
-import crypto from "crypto";
-import { getDataDir } from "../storage/dataDir";
+import crypto from "node:crypto";
+import { z } from "zod";
+// NOTE: relative imports WITH .ts extensions and erasable-only TypeScript syntax (loaded by plain node in the
+// multi-process test fixtures).
+import { getDb, prepare, withTransaction } from "../db/database.ts";
+import { corruptRow, type SqlRow } from "../db/records.ts";
 
 export interface WebSocketTicket {
   ticket: string;
@@ -33,29 +35,50 @@ function normalizeOrigin(origin: string): string {
   }
 }
 
+const TicketRowSchema = z.object({
+  id: z.string().min(1),
+  operator_id: z.string(),
+  server_id: z.string(),
+  origin: z.string().nullable(),
+  purpose: z.string(),
+  created_at: z.number(),
+  expires_at: z.number(),
+});
+
+const TICKET_ID_PATTERN = /^tkt_[a-zA-Z0-9_-]+$/;
+
+/**
+ * Only the SHA-256 digest of a ticket is stored (tickets.id). Tickets are 192-bit random bearer tokens, so a plain
+ * digest is enough to make a copy of the database (or its WAL/backups) useless for replaying a live ticket.
+ */
+function hashTicket(ticket: string): string {
+  return crypto.createHash("sha256").update(ticket, "utf8").digest("hex");
+}
+
+function rowToTicket(row: SqlRow, ticket: string): WebSocketTicket {
+  const parsed = TicketRowSchema.safeParse(row);
+  if (!parsed.success) throw corruptRow("tickets", String(row.id), parsed.error);
+  const r = parsed.data;
+  return {
+    ticket,
+    operatorId: r.operator_id,
+    serverId: r.server_id,
+    origin: r.origin === null ? undefined : r.origin,
+    purpose: r.purpose,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  };
+}
+
+/**
+ * Single-use WebSocket tickets, stored (as digests) in the shared SQLite database so the Next.js process (issuer)
+ * and the terminal gateway process (consumer) see the same rows. There is deliberately no in-memory cache:
+ * the database is the only source of truth.
+ */
 export class TicketService {
-  private static tickets = new Map<string, WebSocketTicket>();
-  private static customTicketsDir: string | null = null;
-
-  static setStorageDir(dir: string | null): void {
-    this.customTicketsDir = dir;
-  }
-
-  static getStorageDir(): string {
-    return this.customTicketsDir || path.join(getDataDir(), "tickets");
-  }
-
-  private static ensureTicketsDir(): string {
-    const dir = this.getStorageDir();
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    }
-    return dir;
-  }
-
   /**
    * Generates a single-use cryptographically random ticket valid for 60 seconds (or custom TTL),
-   * persisted to shared storage for multi-process safety.
+   * persisted to shared storage for multi-process safety. Throws if it cannot be persisted.
    */
   static issueTicket(
     operatorId: string,
@@ -91,68 +114,48 @@ export class TicketService {
       expiresAt: now + ttlSeconds * 1000,
     };
 
-    // Cache in memory
-    this.tickets.set(ticket, ticketObj);
-
-    // Persist to shared filesystem directory for multi-process coordination
-    const ticketsDir = this.ensureTicketsDir();
-    const filePath = path.join(ticketsDir, `${ticket}.json`);
-    try {
-      fs.writeFileSync(filePath, JSON.stringify(ticketObj, null, 2), {
-        encoding: "utf-8",
-        mode: 0o600,
-        flag: "wx",
-      });
-    } catch (err) {
-      console.error("[TicketService] Failed to persist ticket to shared store:", err);
-    }
+    withTransaction((db) => {
+      prepare(
+        db,
+        "INSERT INTO tickets (id, operator_id, server_id, origin, purpose, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).run(
+        hashTicket(ticketObj.ticket),
+        ticketObj.operatorId,
+        ticketObj.serverId,
+        ticketObj.origin === undefined ? null : ticketObj.origin,
+        purpose,
+        ticketObj.createdAt,
+        ticketObj.expiresAt
+      );
+    });
 
     return ticketObj;
   }
 
   /**
-   * Atomically retrieves and removes a single-use ticket across process boundaries.
-   * Replay attempts immediately return null.
+   * Atomically retrieves and removes a single-use ticket across process boundaries
+   * (`DELETE ... RETURNING` is one statement under the write lock, so exactly one caller gets the row).
+   * Replay attempts immediately return null. A ticket that is expired or fails its origin/purpose binding
+   * is still consumed (burned) and yields null.
    */
   static consumeTicket(ticketStr: string, options?: ConsumeTicketOptions): WebSocketTicket | null {
     if (!ticketStr || typeof ticketStr !== "string") return null;
 
-    // Validate ticket string format to prevent directory traversal
-    if (!/^tkt_[a-zA-Z0-9_-]+$/.test(ticketStr)) {
+    // Same format check as the file-backed store had (also keeps garbage out of the query).
+    if (!TICKET_ID_PATTERN.test(ticketStr)) {
       return null;
     }
 
-    // Evict from in-memory cache
-    this.tickets.delete(ticketStr);
-
-    const ticketsDir = this.ensureTicketsDir();
-    const filePath = path.join(ticketsDir, `${ticketStr}.json`);
-    const lockPath = path.join(
-      ticketsDir,
-      `${ticketStr}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}.consuming`
+    const row = withTransaction((db) =>
+      prepare(
+        db,
+        "DELETE FROM tickets WHERE id = ? RETURNING id, operator_id, server_id, origin, purpose, created_at, expires_at"
+      ).get(hashTicket(ticketStr))
     );
+    // Ticket doesn't exist or was already consumed atomically.
+    if (row === undefined) return null;
 
-    // Atomic filesystem consumption: rename guarantees only one process/thread succeeds
-    try {
-      fs.renameSync(filePath, lockPath);
-    } catch {
-      // Ticket doesn't exist or was already consumed atomically
-      return null;
-    }
-
-    let ticketObj: WebSocketTicket | null = null;
-    try {
-      const raw = fs.readFileSync(lockPath, "utf-8");
-      ticketObj = JSON.parse(raw) as WebSocketTicket;
-    } catch {
-      ticketObj = null;
-    } finally {
-      try {
-        fs.unlinkSync(lockPath);
-      } catch {}
-    }
-
-    if (!ticketObj) return null;
+    const ticketObj = rowToTicket(row as SqlRow, ticketStr);
 
     // Verify expiration
     if (Date.now() > ticketObj.expiresAt) {
@@ -177,71 +180,22 @@ export class TicketService {
     return ticketObj;
   }
 
-  /**
-   * Clean expired tickets from memory and shared filesystem storage
-   */
+  /** Deletes expired tickets and returns how many were removed. */
   static pruneExpiredTickets(): number {
-    const now = Date.now();
-    const prunedIds = new Set<string>();
-
-    for (const [k, v] of this.tickets.entries()) {
-      if (now > v.expiresAt) {
-        this.tickets.delete(k);
-        prunedIds.add(k);
-      }
-    }
-
-    const ticketsDir = this.getStorageDir();
-    if (fs.existsSync(ticketsDir)) {
-      try {
-        const files = fs.readdirSync(ticketsDir);
-        for (const file of files) {
-          const fullPath = path.join(ticketsDir, file);
-          try {
-            if (file.endsWith(".consuming")) {
-              const stat = fs.statSync(fullPath);
-              if (now - stat.mtimeMs > 10000) {
-                fs.unlinkSync(fullPath);
-              }
-            } else if (file.endsWith(".json")) {
-              const raw = fs.readFileSync(fullPath, "utf-8");
-              const data = JSON.parse(raw) as WebSocketTicket;
-              if (now > data.expiresAt) {
-                fs.unlinkSync(fullPath);
-                prunedIds.add(data.ticket);
-              }
-            }
-          } catch {}
-        }
-      } catch {}
-    }
-
-    return prunedIds.size;
+    return withTransaction((db) => {
+      const result = prepare(db, "DELETE FROM tickets WHERE expires_at < ?").run(Date.now());
+      return Number(result.changes);
+    });
   }
 
   static getActiveTicketCount(): number {
-    const ticketsDir = this.getStorageDir();
-    if (!fs.existsSync(ticketsDir)) return this.tickets.size;
-    try {
-      const files = fs.readdirSync(ticketsDir).filter((f) => f.endsWith(".json"));
-      return files.length;
-    } catch {
-      return this.tickets.size;
-    }
+    const row = prepare(getDb(), "SELECT COUNT(*) AS n FROM tickets").get();
+    return row === undefined ? 0 : Number(row.n);
   }
 
   static clear(): void {
-    this.tickets.clear();
-    const ticketsDir = this.getStorageDir();
-    if (fs.existsSync(ticketsDir)) {
-      try {
-        const files = fs.readdirSync(ticketsDir);
-        for (const file of files) {
-          try {
-            fs.unlinkSync(path.join(ticketsDir, file));
-          } catch {}
-        }
-      } catch {}
-    }
+    withTransaction((db) => {
+      prepare(db, "DELETE FROM tickets").run();
+    });
   }
 }

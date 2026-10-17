@@ -3,6 +3,9 @@ import { StorageService } from "@/lib/storage";
 import { SSHAdapter } from "@/lib/ssh/adapter";
 import { AuthService } from "@/lib/security/auth";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);

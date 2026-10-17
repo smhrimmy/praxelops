@@ -1,7 +1,7 @@
 import path from "node:path";
 
 /**
- * Resolves the directory that holds all PraxelOps JSON stores.
+ * Resolves the directory that holds all PraxelOps data (praxelops.db, plus legacy JSON stores awaiting import).
  *
  * Evaluated on every call (never cached at module load) so that tests and
  * separate processes can point at an isolated directory via PRAXELOPS_DATA_DIR.

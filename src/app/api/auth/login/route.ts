@@ -20,6 +20,9 @@ function failure(status: number, error: string, headers?: Record<string, string>
   return NextResponse.json({ success: false, error }, { status, headers });
 }
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
     if (!AuthService.checkOriginIfPresent(request)) {

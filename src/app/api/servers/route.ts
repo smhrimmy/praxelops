@@ -4,6 +4,9 @@ import { AuthService } from "@/lib/security/auth";
 import { ServerHostSchema } from "@/types/server";
 import { toPublicServer, toPublicServers } from "@/lib/servers/publicServer";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
