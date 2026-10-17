@@ -30,25 +30,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthenticated }) => 
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/10 via-neutral-900/20 to-neutral-950 select-none p-4">
+    <div className="app-bg flex h-dvh w-full items-center justify-center select-none p-4 overflow-y-auto">
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-sm macos-glass rounded-2xl shadow-2xl border border-black/5 dark:border-white/10 overflow-hidden"
+        className="w-full max-w-sm macos-glass rounded-2xl shadow-2xl border border-line overflow-hidden"
       >
-        <div className="h-10 px-4 bg-white/40 dark:bg-black/30 border-b border-black/5 dark:border-white/10 flex items-center justify-center text-xs font-semibold text-neutral-700 dark:text-neutral-300 tracking-tight">
+        <div className="h-10 px-4 bg-chrome border-b border-line flex items-center justify-center text-xs font-semibold text-fg-2 tracking-tight">
           PraxelOps Studio
         </div>
 
         <div className="p-6 space-y-4">
           <div className="flex flex-col items-center space-y-2">
             <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
-              <Terminal className="w-6 h-6 text-blue-500" />
+              <Terminal className="w-6 h-6 text-info" />
             </div>
-            <h1 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">Operator sign-in</h1>
+            <h1 className="text-sm font-semibold text-fg">Operator sign-in</h1>
           </div>
 
           <div className="space-y-1">
-            <label htmlFor="praxel-username" className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
+            <label htmlFor="praxel-username" className="text-[11px] font-medium text-fg-2">
               Username
             </label>
             <input
@@ -60,12 +60,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthenticated }) => 
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg text-sm bg-white/60 dark:bg-black/30 border border-black/10 dark:border-white/10 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 select-text"
+              className="w-full px-3 py-2 rounded-lg text-sm bg-input border border-line-strong text-fg focus:outline-none focus:ring-2 focus:ring-blue-500 select-text"
             />
           </div>
 
           <div className="space-y-1">
-            <label htmlFor="praxel-password" className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
+            <label htmlFor="praxel-password" className="text-[11px] font-medium text-fg-2">
               Password
             </label>
             <input
@@ -75,12 +75,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthenticated }) => 
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-lg text-sm bg-white/60 dark:bg-black/30 border border-black/10 dark:border-white/10 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 select-text"
+              className="w-full px-3 py-2 rounded-lg text-sm bg-input border border-line-strong text-fg focus:outline-none focus:ring-2 focus:ring-blue-500 select-text"
             />
           </div>
 
           {error && (
-            <p role="alert" className="text-xs text-rose-500">
+            <p role="alert" className="text-xs text-danger">
               {error}
             </p>
           )}
@@ -88,13 +88,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthenticated }) => 
           <button
             type="submit"
             disabled={submitting || username.length === 0 || password.length === 0}
-            className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition"
+            className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white transition"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
             <span>{submitting ? "Signing in..." : "Sign in"}</span>
           </button>
 
-          <p className="text-[10px] text-center text-neutral-500">
+          <p className="text-[10px] text-center text-fg-muted">
             Accounts are created on the server with the create-operator CLI.
           </p>
         </div>

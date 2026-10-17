@@ -385,13 +385,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
   if (servers.length === 0 || tabs.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 bg-neutral-950 text-neutral-100">
+      <div data-theme="dark" className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 bg-neutral-950 text-neutral-100">
         <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
           <TerminalIcon className="w-6 h-6" />
         </div>
         <div className="max-w-md space-y-1">
           <h2 className="text-sm font-semibold">No Active SSH Terminals</h2>
-          <p className="text-xs text-neutral-400 leading-relaxed">
+          <p className="text-xs text-fg-muted leading-relaxed">
             Register a server host in the Fleet inventory to launch genuine interactive SSH shell sessions.
           </p>
         </div>
@@ -411,10 +411,10 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   const activeStatus = activeTab ? connectionStates[activeTab.id] || "connecting" : "connecting";
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-neutral-950 text-neutral-100 select-text">
+    <div data-theme="dark" className="flex-1 min-w-0 flex flex-col h-full overflow-hidden bg-neutral-950 text-neutral-100 select-text">
       {/* Tab Bar */}
       <div className="h-10 bg-neutral-900 border-b border-white/10 flex items-center justify-between px-3 shrink-0 select-none">
-        <div className="flex items-center space-x-1 overflow-x-auto max-w-[70%]">
+        <div className="flex items-center space-x-1 overflow-x-auto min-w-0 flex-1 mr-2">
           {tabs.map((tab) => {
             const isActive = tab.id === activeTabId;
             const tabStatus = connectionStates[tab.id] || "connecting";
@@ -422,14 +422,21 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
             return (
               <div
                 key={tab.id}
-                onClick={() => setActiveTabId(tab.id)}
-                className={`flex items-center space-x-2 px-3 py-1.5 rounded-t-lg text-xs font-medium cursor-pointer transition ${
+                className={`flex items-center space-x-1 shrink-0 pl-3 pr-2 py-1.5 rounded-t-lg text-xs font-medium transition-colors ${
                   isActive
                     ? "bg-neutral-950 text-white border-t-2 border-emerald-500 shadow-sm"
-                    : "text-neutral-400 hover:text-white hover:bg-neutral-800"
+                    : "text-fg-muted hover:text-white hover:bg-neutral-800"
                 }`}
               >
+                <button
+                  type="button"
+                  onClick={() => setActiveTabId(tab.id)}
+                  aria-current={isActive ? "true" : undefined}
+                  aria-label={`${tab.serverName} terminal (${tabStatus})`}
+                  className="flex items-center space-x-2"
+                >
                 <span
+                  aria-hidden="true"
                   className={`w-2 h-2 rounded-full shrink-0 ${
                     tabStatus === "connected"
                       ? "bg-emerald-500"
@@ -441,10 +448,12 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                   }`}
                 />
                 <span className="truncate max-w-[140px]">{tab.serverName}</span>
+                </button>
                 {tabs.length > 1 && (
                   <button
                     onClick={(e) => closeTab(tab.id, e)}
-                    className="p-0.5 rounded hover:bg-white/20 text-neutral-400 hover:text-white"
+                    aria-label={`Close ${tab.serverName} terminal`}
+                    className="p-0.5 rounded hover:bg-white/20 text-fg-muted hover:text-white"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -455,7 +464,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
         </div>
 
         {/* Tab Actions */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 shrink-0">
           {/* Status Badge */}
           <div className="hidden sm:flex items-center space-x-1.5 px-2 py-0.5 rounded bg-white/5 text-[11px] font-mono border border-white/5">
             {activeStatus === "connected" ? (
@@ -470,13 +479,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
               </>
             ) : activeStatus === "error" ? (
               <>
-                <AlertTriangle className="w-3 h-3 text-rose-400" />
-                <span className="text-rose-400">Error</span>
+                <AlertTriangle className="w-3 h-3 text-danger" />
+                <span className="text-danger">Error</span>
               </>
             ) : (
               <>
-                <WifiOff className="w-3 h-3 text-neutral-400" />
-                <span className="text-neutral-400">Disconnected</span>
+                <WifiOff className="w-3 h-3 text-fg-muted" />
+                <span className="text-fg-muted">Disconnected</span>
               </>
             )}
           </div>
@@ -484,7 +493,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           <button
             onClick={handleReconnect}
             title="Reconnect Terminal"
-            className="p-1.5 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
+            aria-label="Reconnect terminal"
+            className="p-1.5 rounded hover:bg-neutral-800 text-fg-muted hover:text-white transition"
           >
             <RotateCcw className="w-3.5 h-3.5" />
           </button>
@@ -492,7 +502,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           <button
             onClick={handleClearScreen}
             title="Clear Screen"
-            className="p-1.5 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition"
+            aria-label="Clear screen"
+            className="p-1.5 rounded hover:bg-neutral-800 text-fg-muted hover:text-white transition"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -501,13 +512,16 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           <div className="relative group">
             <button
               title="Open Session to Another Server"
-              className="p-1.5 rounded hover:bg-neutral-800 text-neutral-400 hover:text-white transition flex items-center space-x-1 text-xs"
+              aria-label="Open session to another server"
+              aria-haspopup="menu"
+              className="p-1.5 rounded hover:bg-neutral-800 text-fg-muted hover:text-white transition flex items-center space-x-1 text-xs"
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="text-[11px] hidden md:inline">New PTY</span>
             </button>
-            <div className="absolute right-0 top-full mt-1 hidden group-hover:block w-48 bg-neutral-900 border border-white/10 rounded-lg shadow-2xl py-1 z-30">
-              <div className="px-3 py-1 text-[10px] uppercase font-mono text-neutral-500">
+            <div className="absolute right-0 top-full pt-1 hidden group-hover:block group-focus-within:block z-30">
+            <div className="w-48 bg-neutral-900 border border-white/10 rounded-lg shadow-2xl py-1">
+              <div className="px-3 py-1 text-[10px] uppercase font-mono text-fg-muted">
                 Target Node
               </div>
               {servers.map((s) => (
@@ -516,10 +530,11 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
                   onClick={() => openNewTab(s)}
                   className="w-full text-left px-3 py-1.5 hover:bg-white/10 text-xs text-neutral-300 hover:text-white truncate flex items-center space-x-2"
                 >
-                  <Server className="w-3 h-3 text-neutral-400 shrink-0" />
+                  <Server className="w-3 h-3 text-fg-muted shrink-0" />
                   <span className="truncate">{s.name}</span>
                 </button>
               ))}
+            </div>
             </div>
           </div>
         </div>
@@ -527,7 +542,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
       {/* Quick Presets Bar */}
       <div className="px-3 py-1.5 bg-neutral-900/60 border-b border-white/5 flex items-center space-x-2 overflow-x-auto shrink-0 select-none">
-        <span className="text-[10px] font-mono uppercase text-neutral-500 shrink-0">
+        <span className="text-[10px] font-mono uppercase text-fg-muted shrink-0">
           Presets:
         </span>
         {quickCommands.map((q) => (
@@ -546,10 +561,10 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       {activeStatus === "error" && (
         <div className="px-3 py-2 bg-rose-500/10 border-b border-rose-500/20 text-rose-300 text-xs flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-danger shrink-0" />
             <span>
               {errorMessages[activeTab.id] || "Terminal Gateway connection failed."}{" "}
-              <span className="text-neutral-400">
+              <span className="text-fg-muted">
                 Run <code className="bg-white/10 px-1 py-0.5 rounded">npm run terminal:gateway</code> to start WebSocket gateway on port 3001.
               </span>
             </span>

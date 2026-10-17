@@ -91,10 +91,10 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
 
   const getFileIcon = (file: RemoteFileItem) => {
     if (file.isDirectory) {
-      return <Folder className="w-4 h-4 text-amber-500 fill-amber-500/20" />;
+      return <Folder className="w-4 h-4 text-warning fill-amber-500/20" />;
     }
     if (file.name.endsWith(".tar.gz") || file.name.endsWith(".zip") || file.name.endsWith(".gz")) {
-      return <FileArchive className="w-4 h-4 text-purple-400" />;
+      return <FileArchive className="w-4 h-4 text-violet" />;
     }
     if (
       file.name.endsWith(".yml") ||
@@ -103,9 +103,9 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
       file.name.endsWith(".conf") ||
       file.name.endsWith(".sh")
     ) {
-      return <FileCode className="w-4 h-4 text-blue-400" />;
+      return <FileCode className="w-4 h-4 text-info" />;
     }
-    return <FileText className="w-4 h-4 text-neutral-400" />;
+    return <FileText className="w-4 h-4 text-fg-muted" />;
   };
 
   const handlePreview = async (file: RemoteFileItem) => {
@@ -134,14 +134,14 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
   if (servers.length === 0 || !currentServer) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500">
+        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 flex items-center justify-center text-warning">
           <FolderTree className="w-6 h-6" />
         </div>
         <div className="max-w-md space-y-1">
-          <h2 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+          <h2 className="text-sm font-semibold text-fg">
             No Active SFTP Session
           </h2>
-          <p className="text-xs text-neutral-500 leading-relaxed">
+          <p className="text-xs text-fg-muted leading-relaxed">
             Register a server host in Fleet to explore remote filesystems, inspect logs, and transfer files via genuine SFTP.
           </p>
         </div>
@@ -159,28 +159,29 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden p-6 space-y-4">
+    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden p-3 sm:p-6 space-y-4">
       {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center space-x-2">
-            <FolderTree className="w-5 h-5 text-amber-500" />
+          <h1 className="text-xl font-bold tracking-tight text-fg flex items-center space-x-2">
+            <FolderTree className="w-5 h-5 text-warning" />
             <span>Remote SFTP Explorer</span>
           </h1>
-          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
+          <p className="text-xs text-fg-muted mt-0.5">
             Real SFTP directory exploration on {currentServer.name} ({currentServer.host}).
           </p>
         </div>
 
         {/* Server Selector & Refresh */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <select
+            aria-label="Server"
             value={currentServer.id}
             onChange={(e) => {
               const s = servers.find((srv) => srv.id === e.target.value);
               if (s) setCurrentServer(s);
             }}
-            className="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs font-medium text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="px-3 py-1.5 rounded-lg bg-sunken border border-line-strong text-xs font-medium text-fg focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0 flex-1 sm:flex-none"
           >
             {servers.map((s) => (
               <option key={s.id} value={s.id}>
@@ -192,8 +193,9 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
           <button
             onClick={() => fetchFiles(currentPath, currentServer)}
             disabled={loading}
-            className="p-2 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-neutral-600 dark:text-neutral-300 transition"
+            className="p-2 rounded-lg bg-sunken hover:bg-hover-strong text-fg-2 transition"
             title="Refresh Directory"
+            aria-label="Refresh directory"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
@@ -201,8 +203,8 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
       </div>
 
       {/* Path Breadcrumbs */}
-      <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 text-xs font-mono text-neutral-700 dark:text-neutral-300">
-        <span className="text-neutral-400">Path:</span>
+      <div className="flex items-center space-x-2 px-3 py-2 rounded-lg bg-sunken border border-line text-xs font-mono text-fg-2">
+        <span className="text-fg-muted">Path:</span>
         <div className="flex items-center space-x-1 overflow-x-auto">
           {currentPath.split("/").map((segment, index, arr) => {
             const subPath = arr.slice(0, index + 1).join("/") || "/";
@@ -210,7 +212,7 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
               <button
                 key={index}
                 onClick={() => handleNavigate(subPath)}
-                className="hover:underline hover:text-blue-500 px-1 py-0.5 rounded"
+                className="hover:underline hover:text-info px-1 py-0.5 rounded"
               >
                 {segment || "/"}
               </button>
@@ -221,26 +223,26 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
 
       {/* Error Banner */}
       {error && (
-        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center space-x-2">
+        <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-danger text-xs flex items-center space-x-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
       {/* File List Table */}
-      <div className="flex-1 overflow-y-auto rounded-xl border border-black/5 dark:border-white/10 bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md">
+      <div className="flex-1 min-h-0 overflow-auto rounded-xl border border-line bg-surface-2 backdrop-blur-md">
         {loading ? (
-          <div className="h-48 flex items-center justify-center space-x-2 text-xs text-neutral-400">
-            <RefreshCw className="w-4 h-4 animate-spin text-amber-500" />
+          <div className="h-48 flex items-center justify-center space-x-2 text-xs text-fg-muted">
+            <RefreshCw className="w-4 h-4 animate-spin text-warning" />
             <span>Listing remote directory via SFTP...</span>
           </div>
         ) : files.length === 0 ? (
-          <div className="h-48 flex flex-col items-center justify-center text-xs text-neutral-400">
+          <div className="h-48 flex flex-col items-center justify-center text-xs text-fg-muted">
             <p>Directory is empty or inaccessible.</p>
           </div>
         ) : (
-          <table className="w-full text-left text-xs">
-            <thead className="bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/10 text-neutral-500 dark:text-neutral-400 font-medium select-none sticky top-0">
+          <table className="w-full min-w-[22rem] text-left text-xs">
+            <thead className="bg-elevated border-b border-line text-fg-muted font-medium select-none sticky top-0 z-10">
               <tr>
                 <th className="py-2.5 px-4">Name</th>
                 <th className="py-2.5 px-4">Size</th>
@@ -249,34 +251,37 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
                 <th className="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+            <tbody className="divide-y divide-line font-mono">
               {files.map((file, idx) => (
                 <tr
                   key={idx}
-                  className="hover:bg-black/5 dark:hover:bg-white/5 transition"
+                  className="hover:bg-hover transition"
                 >
                   <td className="py-2 px-4">
-                    <div
-                      onClick={() => {
-                        if (file.isDirectory) handleNavigate(file.path);
-                      }}
-                      className={`flex items-center space-x-2.5 ${
-                        file.isDirectory
-                          ? "cursor-pointer text-blue-600 dark:text-blue-400 font-semibold"
-                          : "text-neutral-800 dark:text-neutral-200"
-                      }`}
-                    >
-                      {getFileIcon(file)}
-                      <span className="truncate">{file.name}</span>
-                    </div>
+                    {file.isDirectory ? (
+                      <button
+                        type="button"
+                        onClick={() => handleNavigate(file.path)}
+                        aria-label={`Open folder ${file.name}`}
+                        className="flex items-center space-x-2.5 text-info font-semibold hover:underline text-left"
+                      >
+                        {getFileIcon(file)}
+                        <span className="truncate">{file.name}</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center space-x-2.5 text-fg">
+                        {getFileIcon(file)}
+                        <span className="truncate">{file.name}</span>
+                      </div>
+                    )}
                   </td>
-                  <td className="py-2 px-4 text-neutral-500">
+                  <td className="py-2 px-4 text-fg-muted">
                     {file.isDirectory ? "—" : formatFileSize(file.size)}
                   </td>
-                  <td className="py-2 px-4 text-neutral-500 hidden sm:table-cell">
+                  <td className="py-2 px-4 text-fg-muted hidden sm:table-cell">
                     {file.permissions}
                   </td>
-                  <td className="py-2 px-4 text-neutral-500 hidden md:table-cell">
+                  <td className="py-2 px-4 text-fg-muted hidden md:table-cell">
                     {file.modifyTime ? new Date(file.modifyTime).toLocaleString() : "—"}
                   </td>
                   <td className="py-2 px-4 text-right">
@@ -285,7 +290,8 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
                         <button
                           onClick={() => handlePreview(file)}
                           title="Preview File Content"
-                          className="p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-neutral-500 hover:text-neutral-900 dark:hover:text-white"
+                          aria-label={`Preview ${file.name}`}
+                          className="p-1 rounded hover:bg-hover-strong text-fg-muted hover:text-fg"
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
@@ -301,20 +307,21 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
 
       {/* File Preview Modal */}
       {previewFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-2xl bg-white dark:bg-neutral-900 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
-            <div className="flex items-center justify-between px-5 py-3 border-b border-black/5 dark:border-white/10">
-              <span className="text-xs font-semibold font-mono text-neutral-900 dark:text-neutral-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-label={`Preview of ${previewFile.name}`} className="w-full max-w-2xl bg-elevated rounded-2xl border border-line shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-line">
+              <span className="text-xs font-semibold font-mono text-fg">
                 {previewFile.name}
               </span>
               <button
                 onClick={() => setPreviewFile(null)}
-                className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-neutral-400"
+                aria-label="Close preview"
+                className="p-1.5 rounded hover:bg-hover text-fg-muted"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <pre className="p-4 bg-neutral-950 text-neutral-200 text-xs font-mono overflow-y-auto leading-relaxed flex-1">
+            <pre data-theme="dark" className="p-4 bg-neutral-950 text-neutral-200 text-xs font-mono overflow-y-auto leading-relaxed flex-1">
               {previewFile.content}
             </pre>
           </div>
