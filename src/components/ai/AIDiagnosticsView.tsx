@@ -20,6 +20,7 @@ import {
   AIOperationProposal,
   RiskLevel,
 } from "@/types/ai";
+import { apiFetch } from "@/lib/client/api";
 
 interface AIDiagnosticsViewProps {
   servers: ServerHost[];
@@ -50,7 +51,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
     setErrorBanner(null);
 
     try {
-      const res = await fetch("/api/ai/diagnose", {
+      const res = await apiFetch("/api/ai/diagnose", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ serverId: srv.id }),
@@ -75,7 +76,7 @@ export const AIDiagnosticsView: React.FC<AIDiagnosticsViewProps> = ({
     setExecutionResult(null);
 
     try {
-      const res = await fetch("/api/ai/approve", {
+      const res = await apiFetch("/api/ai/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

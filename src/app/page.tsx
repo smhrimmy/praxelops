@@ -12,9 +12,11 @@ import { SFTPView } from "@/components/sftp/SFTPView";
 import { AIDiagnosticsView } from "@/components/ai/AIDiagnosticsView";
 import { DeploymentsView } from "@/components/deployments/DeploymentsView";
 import { AuditView } from "@/components/audit/AuditView";
+import { LoginScreen } from "@/components/auth/LoginScreen";
 import { ServerHost } from "@/types/server";
+import { apiFetch, fetchSession, logout, UNAUTHORIZED_EVENT } from "@/lib/client/api";
 
-export default function PraxelOpsStudioPage() {
+function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
   const [servers, setServers] = useState<ServerHost[]>([]);
   const [selectedServer, setSelectedServer] = useState<ServerHost | undefined>(undefined);
   const [activeView, setActiveView] = useState<string>("fleet");
@@ -26,7 +28,7 @@ export default function PraxelOpsStudioPage() {
   // Load server list
   const loadServers = async () => {
     try {
-      const res = await fetch("/api/servers");
+      const res = await apiFetch("/api/servers");
       const data = await res.json();
       if (data.success && data.data) {
         setServers(data.data);
@@ -41,7 +43,7 @@ export default function PraxelOpsStudioPage() {
 
   const handleLoadDemo = async () => {
     try {
-      const res = await fetch("/api/servers/demo", { method: "POST" });
+      const res = await apiFetch("/api/servers/demo", { method: "POST" });
       const data = await res.json();
       if (data.success && data.data) {
         setServers(data.data);
@@ -55,7 +57,7 @@ export default function PraxelOpsStudioPage() {
   const handleDeleteServer = async (serverId: string) => {
     if (!confirm("Are you sure you want to remove this host from inventory?")) return;
     try {
-      const res = await fetch(`/api/servers?id=${serverId}`, { method: "DELETE" });
+      const res = await apiFetch(`/api/servers?id=${encodeURIComponent(serverId)}`, { method: "DELETE" });
       const data = await res.json();
       if (data.success) {
         const next = servers.filter((s) => s.id !== serverId);
@@ -107,6 +109,7 @@ export default function PraxelOpsStudioPage() {
         onToggleTheme={toggleTheme}
         onlineCount={onlineCount}
         totalServers={servers.length}
+        onLogout={onLogout}
       />
 
       {/* Main macOS Desktop Window Stage */}
@@ -238,4 +241,42 @@ export default function PraxelOpsStudioPage() {
       />
     </div>
   );
+}
+
+type AuthStatus = "loading" | "unauthenticated" | "authenticated";
+
+export default function PraxelOpsStudioPage() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchSession().then((session) => {
+      if (!cancelled) setAuthStatus(session.authenticated ? "authenticated" : "unauthenticated");
+    });
+    const onUnauthorized = () => setAuthStatus("unauthenticated");
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    await logout();
+    setAuthStatus("unauthenticated");
+  };
+
+  if (authStatus === "loading") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center text-xs text-neutral-500">
+        Loading...
+      </div>
+    );
+  }
+
+  if (authStatus === "unauthenticated") {
+    return <LoginScreen onAuthenticated={() => setAuthStatus("authenticated")} />;
+  }
+
+  return <PraxelOpsWorkspace onLogout={handleLogout} />;
 }

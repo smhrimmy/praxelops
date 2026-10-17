@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     const deployments = StorageService.getDeployments();
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     const rate = AuthService.checkRateLimit(`client-deploy-${auth.operatorId}`, 20, 60);

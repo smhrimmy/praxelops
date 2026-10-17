@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 import { DeploymentWorkflow } from "@/types/deployment";
+import { apiFetch } from "@/lib/client/api";
 
 interface DeploymentsViewProps {
   servers: ServerHost[];
@@ -37,7 +38,7 @@ export const DeploymentsView: React.FC<DeploymentsViewProps> = ({
 
   const fetchDeployments = async () => {
     try {
-      const res = await fetch("/api/deployments");
+      const res = await apiFetch("/api/deployments");
       const data = await res.json();
       if (data.success) {
         setDeployments(data.data);
@@ -62,7 +63,7 @@ export const DeploymentsView: React.FC<DeploymentsViewProps> = ({
 
     setIsTriggering(true);
     try {
-      const res = await fetch("/api/deployments", {
+      const res = await apiFetch("/api/deployments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -97,7 +98,7 @@ export const DeploymentsView: React.FC<DeploymentsViewProps> = ({
       return;
     }
     try {
-      const res = await fetch("/api/deployments", {
+      const res = await apiFetch("/api/deployments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

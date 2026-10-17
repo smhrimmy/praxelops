@@ -3,7 +3,6 @@ import { WebSocketServer, WebSocket } from "ws";
 import { URL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { SSHAdapter } from "@/lib/ssh/adapter";
-import { AuthService } from "@/lib/security/auth";
 import { StorageService } from "@/lib/storage";
 import { TicketService } from "@/lib/security/ticket";
 
@@ -20,8 +19,6 @@ export interface TerminalGatewayConfig {
 export interface ClientInboundMessage {
   type: "auth" | "input" | "resize" | "ping" | "close";
   ticket?: string;
-  token?: string;
-  serverId?: string;
   data?: string;
   cols?: number;
   rows?: number;
@@ -208,26 +205,29 @@ export class TerminalGateway {
       // Extract parameters from URL query
       const fullUrl = new URL(req.url || "", `http://${req.headers.host || "127.0.0.1"}`);
       const queryTicket = fullUrl.searchParams.get("ticket");
-      const queryToken = fullUrl.searchParams.get("token");
-      const queryServerId = fullUrl.searchParams.get("serverId");
-      const authHeader = req.headers.authorization?.replace(/^Bearer\s+/i, "") ||
-        (req.headers["x-operator-token"] as string | undefined);
+      // Raw operator/session tokens are NOT an authentication mode in any environment.
+      const presentedRawToken =
+        fullUrl.searchParams.has("token") ||
+        req.headers.authorization !== undefined ||
+        req.headers["x-operator-token"] !== undefined;
 
       const initialTicket = queryTicket;
-      const initialToken = queryToken || authHeader;
-      const initialServerId = queryServerId;
       const initialCols = parseInt(fullUrl.searchParams.get("cols") || "80", 10);
       const initialRows = parseInt(fullUrl.searchParams.get("rows") || "24", 10);
       const initialTerm = fullUrl.searchParams.get("term") || "xterm-256color";
       const requestOrigin = req.headers.origin;
       const clientIp = this.getClientIp(req);
 
-      // Connect immediately if ticket is provided, or if dev/test credentials are provided
-      if (initialTicket || (initialToken && initialServerId)) {
+      if (!initialTicket && presentedRawToken) {
+        this.sendSafeError(ws, "Authentication failed: Token authentication is not supported; a single-use ticket is required");
+        ws.close(1008, "Ticket required");
+        return;
+      }
+
+      // Connect immediately if a ticket is provided; otherwise wait for an auth frame carrying one
+      if (initialTicket) {
         this.handleInitialConnection(ws, {
-          ticket: initialTicket || undefined,
-          token: initialToken || undefined,
-          serverId: initialServerId || undefined,
+          ticket: initialTicket,
           cols: initialCols,
           rows: initialRows,
           term: initialTerm,
@@ -274,16 +274,14 @@ export class TerminalGateway {
               this.sendSafeError(ws, "Session already authenticated and initialized");
               return;
             }
-            if (!msg.ticket && (!msg.token || !msg.serverId)) {
-              this.sendSafeError(ws, "Auth message requires 'ticket' or 'token' and 'serverId'");
+            if (typeof msg.ticket !== "string" || msg.ticket.length === 0) {
+              this.sendSafeError(ws, "Auth message requires a single-use 'ticket'");
               ws.close(1008, "Missing auth credentials");
               return;
             }
 
             const meta = await this.handleInitialConnection(ws, {
               ticket: msg.ticket,
-              token: msg.token,
-              serverId: msg.serverId,
               cols: msg.cols || 80,
               rows: msg.rows || 24,
               term: msg.term || "xterm-256color",
@@ -350,9 +348,7 @@ export class TerminalGateway {
   private async handleInitialConnection(
     ws: WebSocket,
     params: {
-      ticket?: string;
-      token?: string;
-      serverId?: string;
+      ticket: string;
       cols: number;
       rows: number;
       term: string;
@@ -360,43 +356,18 @@ export class TerminalGateway {
       clientIp?: string;
     }
   ): Promise<GatewaySessionMeta | null> {
-    let operatorId = "";
-    let serverId = "";
-
-    // 1. Authenticate via single-use ticket if provided
-    if (params.ticket) {
-      const ticketData = TicketService.consumeTicket(params.ticket, {
-        expectedOrigin: params.origin,
-        expectedPurpose: "terminal_shell",
-      });
-      if (!ticketData) {
-        this.sendSafeError(ws, "Authentication failed: Invalid, expired, or previously consumed ticket");
-        ws.close(1008, "Invalid ticket");
-        return null;
-      }
-      operatorId = ticketData.operatorId;
-      serverId = ticketData.serverId;
-    } else if (params.token && params.serverId) {
-      // In production, reject raw query tokens to enforce short-lived single-use tickets
-      if (process.env.NODE_ENV === "production") {
-        this.sendSafeError(ws, "Authentication failed: Single-use ticket required in production");
-        ws.close(1008, "Ticket required");
-        return null;
-      }
-
-      const auth = AuthService.verifyToken(params.token);
-      if (!auth.valid || !auth.operatorId) {
-        this.sendSafeError(ws, `Authentication failed: ${auth.error || "Invalid operator token"}`);
-        ws.close(1008, "Authentication failed");
-        return null;
-      }
-      operatorId = auth.operatorId;
-      serverId = params.serverId;
-    } else {
-      this.sendSafeError(ws, "Authentication failed: Missing ticket or credentials");
-      ws.close(1008, "Missing credentials");
+    // 1. Authenticate via single-use ticket (the only supported mode, in every environment)
+    const ticketData = TicketService.consumeTicket(params.ticket, {
+      expectedOrigin: params.origin,
+      expectedPurpose: "terminal_shell",
+    });
+    if (!ticketData) {
+      this.sendSafeError(ws, "Authentication failed: Invalid, expired, or previously consumed ticket");
+      ws.close(1008, "Invalid ticket");
       return null;
     }
+    const operatorId = ticketData.operatorId;
+    const serverId = ticketData.serverId;
 
     // 2. Enforce concurrent session limit
     if (this.sessions.size >= this.maxSessions) {
@@ -600,8 +571,30 @@ export class TerminalGateway {
   }
 }
 
+/**
+ * Fail-closed startup check for the standalone gateway process. Returns a fatal error message,
+ * or null when the configuration is acceptable.
+ */
+export function getGatewayStartupError(env: Readonly<Record<string, string | undefined>>): string | null {
+  if (env.NODE_ENV === "production") {
+    const origins = (env.ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((o) => o.trim())
+      .filter(Boolean);
+    if (origins.length === 0) {
+      return "FATAL: ALLOWED_ORIGINS must be set (comma-separated full origins) when NODE_ENV=production; refusing to start the terminal gateway.";
+    }
+  }
+  return null;
+}
+
 // Standalone runner when executed directly via Node
 if (typeof process !== "undefined" && process.argv[1] && process.argv[1].endsWith("terminalGateway.ts")) {
+  const startupError = getGatewayStartupError(process.env);
+  if (startupError) {
+    console.error(`[PraxelOps] ${startupError}`);
+    process.exit(1);
+  }
   const gateway = new TerminalGateway();
   gateway.listen().then((port) => {
     console.log(`[PraxelOps] Authenticated SSH Terminal WebSocket Gateway listening on ws://127.0.0.1:${port}`);

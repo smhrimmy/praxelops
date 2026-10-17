@@ -16,6 +16,7 @@ import {
   Maximize2,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
+import { apiFetch } from "@/lib/client/api";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalTab {
@@ -174,7 +175,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       term.write("\x1b[90mAcquiring secure single-use terminal ticket...\x1b[0m\r\n");
       let ticket = "";
       try {
-        const ticketRes = await fetch("/api/ssh/ticket", {
+        const ticketRes = await apiFetch("/api/ssh/ticket", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ serverId: tab.serverId }),

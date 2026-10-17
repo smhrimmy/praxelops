@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
 import { RemoteFileItem } from "@/types/ssh";
+import { apiFetch } from "@/lib/client/api";
 
 interface SFTPViewProps {
   servers: ServerHost[];
@@ -41,7 +42,7 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/sftp?serverId=${srv.id}&path=${encodeURIComponent(path)}`
       );
       const data = await res.json();
@@ -110,7 +111,7 @@ export const SFTPView: React.FC<SFTPViewProps> = ({
   const handlePreview = async (file: RemoteFileItem) => {
     if (!currentServer) return;
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/sftp?action=preview&serverId=${currentServer.id}&path=${encodeURIComponent(file.path)}`
       );
       const data = await res.json();

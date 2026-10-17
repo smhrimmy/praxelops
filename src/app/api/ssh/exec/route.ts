@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     if (!AuthService.checkPayloadSize(request, 65536)) {

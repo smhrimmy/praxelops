@@ -671,3 +671,61 @@ curl -s http://127.0.0.1:3001/
 
 
 
+
+---
+
+## 7. M6.3 Authentication (operator login, CSRF/Origin, Host allowlist, ticket-only gateway)
+
+### What changed
+
+- **Removed the dev bypasses.** `AuthService.authenticateRequest` no longer inspects the `Host` header (the old `startsWith("localhost")` / `startsWith("127.0.0.1")` check let `localhost.evil.example` and `127.0.0.1.nip.io` authenticate as `local-operator` and skip CSRF) and the hard-coded `local-operator-token` is gone in every `NODE_ENV`. `AuthService.verifyToken` was deleted with it.
+- **Operator accounts** (`src/lib/security/operators.ts`): `operators.json` in the data dir (atomic + locked writes, strict reads). Record `{ id, username, passwordHash, createdAt }`, hash format `scrypt$N$r$p$saltB64$hashB64` (N=2^15, r=8, p=1, 32-byte salt, 64-byte key), verified with `timingSafeEqual`; an unknown username still runs a dummy scrypt. Usernames `^[a-z0-9_.-]{3,32}$`, passwords at least 12 characters (Zod).
+- **Sessions** (`src/lib/security/auth.ts`): 32-byte random token, 8h idle timeout (sliding), 24h absolute cap, logout deletes. CSRF token = `base64url(HMAC-SHA256(masterSecret, sessionToken))`. Sessions are in-memory (see limitation below). Session store and rate-limit table are pinned to `globalThis` so all Next route bundles share them.
+- **Routes**: `POST /api/auth/login` (Zod body, 4 KB cap, 5/min per IP and per username plus a 30/min global bucket, generic `Invalid username or password`, audit for success and failure, never logs the password; cookie `praxel_session`, HttpOnly, SameSite=Strict, Path=/, Max-Age=86400, Secure in production), `GET /api/auth/session` (`{authenticated, operatorId?, csrfToken?}`), `POST /api/auth/logout` (requires CSRF; clears cookie + session; audit). New audit event types `auth_login`, `auth_logout`.
+- **Every non-GET/HEAD/OPTIONS request** now needs: a valid Origin (exact match against the allowlist; missing or `null` is rejected) and, for cookie sessions, a matching `x-csrf-token` (constant-time compare). `Authorization: Bearer <session token>` clients skip CSRF but any Origin they send must still be allowed. Auth failures return `auth.status` (401 no/invalid session, 403 Origin/CSRF) from all routes.
+- **Allowed origins** = `ALLOWED_ORIGINS` (comma list, each normalized with `new URL(x).origin`) plus, outside production only, `http://localhost:<PORT>` and `http://127.0.0.1:<PORT>` (`PORT` default 3000).
+- **Host allowlist (DNS-rebinding defense)**: `src/proxy.ts` (Next 16 `proxy` convention, matcher `/api/:path*`) returns 421 unless `Host` exactly equals `localhost:<PORT>`, `127.0.0.1:<PORT>`, `[::1]:<PORT>`, the host of an `ALLOWED_ORIGINS` entry, or an `ALLOWED_HOSTS` entry. Pure logic lives in `src/lib/security/origins.ts` (unit tested).
+- **Terminal gateway**: query/header token authentication removed in all environments; only single-use tickets (`?ticket=` or the first `auth` frame) are accepted. Any `?token=`, `Authorization` or `x-operator-token` without a ticket is closed with 1008. `getGatewayStartupError()` makes the standalone entrypoint log a fatal error and `process.exit(1)` when `NODE_ENV=production` and `ALLOWED_ORIGINS` is empty (not enforced by the constructor, so tests are unaffected).
+- **Frontend**: root page calls `/api/auth/session` on load and shows `LoginScreen` when unauthenticated (also on any later 401); `src/lib/client/api.ts` `apiFetch` sends `credentials: "same-origin"` plus `x-csrf-token` on mutations and is used by every client `fetch("/api...")` including the TerminalView ticket request; a Sign out button sits in the menu bar.
+- `tsconfig.json` gained `allowImportingTsExtensions` so `operators.ts` can import `../storage/*.ts` with explicit extensions (required for plain-node type stripping).
+
+### Creating an operator
+
+```bash
+# password from env (CI / scripted) ...
+PRAXELOPS_OPERATOR_PASSWORD='a long passphrase' \
+  node --experimental-strip-types scripts/create-operator.ts alice
+# ... or omit it on a terminal to be prompted twice with echo off
+node --experimental-strip-types scripts/create-operator.ts alice
+# replace the password of an existing operator
+node --experimental-strip-types scripts/create-operator.ts alice --reset
+```
+
+An existing username is never overwritten without `--reset`. The file lands in `PRAXELOPS_DATA_DIR` (default `./.peos/data/operators.json`), so run the command with the same data dir as the web server. Node prints a harmless `MODULE_TYPELESS_PACKAGE_JSON` warning; add `--no-warnings` to hide it. No npm script was added (package.json untouched in this step).
+
+### Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `ALLOWED_ORIGINS` | Comma list of full origins (`https://ops.example.com`) allowed to make state-changing requests; their hosts are also allowed in the `Host` check. Required in production (the gateway refuses to start without it). |
+| `ALLOWED_HOSTS` | Extra exact `Host` header values (`host[:port]`) accepted for `/api/*`, e.g. an internal name behind a proxy. |
+| `PORT` | Port used to derive the default loopback origins/hosts (default 3000). |
+| `PRAXELOPS_SECRET` | 32+ char master secret used for the CSRF HMAC (and encryption); mandatory in production. |
+| `PRAXELOPS_DATA_DIR` | Location of `operators.json` and the other stores. |
+| `PRAXELOPS_OPERATOR_PASSWORD` | Password input for `create-operator`. |
+
+Browsing the dev server by any other hostname/IP (for example a LAN address) now needs both `ALLOWED_HOSTS` (Host check) and `ALLOWED_ORIGINS` (mutations).
+
+### Test evidence
+
+- `npx tsc --noEmit`: exit 0.
+- `npx vitest run`: 16 files, 130 tests passing (baseline 81). New coverage: auth bypass regression (look-alike Hosts, `local-operator-token` in development/test/production), CSRF/Origin matrix for POST/PUT/PATCH/DELETE, bearer path, idle/absolute expiry with fake timers, operator hashing/validation/timing, login/session/logout route handlers (cookie flags, generic failure, per-user and per-IP rate limiting, audit), host/origin allowlist units, `proxy()` unit test, gateway `?token=` rejection (dev literal, bogus, and a *valid* session token in production, with `createInteractiveSession` asserted not called), ticket flow in production including replay refusal, gateway startup guard.
+- `npm run build`: succeeds; routes include `/api/auth/login`, `/api/auth/logout`, `/api/auth/session`, and `ƒ Proxy (Middleware)`.
+- Smoke test against `next start`: look-alike `Host` headers get 421; unauthenticated `/api/servers` 401; login sets the hardened cookie; mutation without CSRF 403, without/with foreign Origin 403, correct 400-class validation response; logout invalidates the session.
+
+### Known limitations
+
+- Sessions live in web-process memory: restarting (or running several web processes) means operators must sign in again, and sessions are not shared across processes. The ticket store remains file-backed, so the gateway process is unaffected.
+- Login rate limiting is also in-memory per process, and the client IP comes from `X-Forwarded-For`/`X-Real-IP` (spoofable unless a trusted reverse proxy overwrites it); the per-username and global buckets are the backstop. A burst of failures can temporarily lock a username out (5/min).
+- `npm run terminal:gateway` currently cannot start under plain `node --experimental-strip-types`: `terminalGateway.ts` (and `ssh/adapter`, `storage`) still import via the `@/` alias, which only Next/Vitest resolve. This predates M6.3; the production startup guard is implemented and unit tested but not exercisable through that script until those imports are made relative.
+- Single operator role; no password-change UI (use `--reset`).

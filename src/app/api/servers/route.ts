@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     const rate = AuthService.checkRateLimit("client-servers-get", 120, 60);
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     if (!AuthService.checkPayloadSize(request, 65536)) {
@@ -77,7 +77,7 @@ export async function DELETE(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
     if (!auth.authenticated) {
-      return NextResponse.json({ success: false, error: auth.error }, { status: 401 });
+      return NextResponse.json({ success: false, error: auth.error }, { status: auth.status ?? 401 });
     }
 
     const { searchParams } = new URL(request.url);

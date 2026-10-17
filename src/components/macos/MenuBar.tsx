@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Server,
   Zap,
+  LogOut,
 } from "lucide-react";
 
 interface MenuBarProps {
@@ -20,6 +21,7 @@ interface MenuBarProps {
   onToggleTheme: () => void;
   onlineCount: number;
   totalServers: number;
+  onLogout: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -30,6 +32,7 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onToggleTheme,
   onlineCount,
   totalServers,
+  onLogout,
 }) => {
   const [time, setTime] = useState<string>("");
 
@@ -159,6 +162,16 @@ export const MenuBar: React.FC<MenuBarProps> = ({
           ) : (
             <Moon className="w-3.5 h-3.5 text-neutral-700" />
           )}
+        </button>
+
+        {/* Sign out */}
+        <button
+          onClick={onLogout}
+          aria-label="Sign out"
+          className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 transition text-neutral-600 dark:text-neutral-300"
+          title="Sign out"
+        >
+          <LogOut className="w-3.5 h-3.5" />
         </button>
 
         {/* Live Clock */}

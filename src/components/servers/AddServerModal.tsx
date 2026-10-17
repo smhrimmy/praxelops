@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { X, Server, Key, Lock, Tag, AlertCircle } from "lucide-react";
 import { CreateServerInput, ServerHost } from "@/types/server";
+import { apiFetch } from "@/lib/client/api";
 
 interface AddServerModalProps {
   isOpen: boolean;
@@ -40,7 +41,7 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch("/api/servers", {
+      const res = await apiFetch("/api/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),

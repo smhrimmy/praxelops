@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { WebSocket } from "ws";
-import { TerminalGateway } from "./terminalGateway";
+import { TerminalGateway, getGatewayStartupError } from "./terminalGateway";
 import { SSHAdapter, CreateSessionOptions } from "@/lib/ssh/adapter";
 import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
+import { TicketService } from "@/lib/security/ticket";
 import { ServerHost } from "@/types/server";
 
 class TestClient {
@@ -133,13 +134,14 @@ describe("TerminalGateway WebSocket Transport", () => {
     return client;
   };
 
-  it("rejects unauthorized connection with invalid token", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: false,
-      error: "Invalid operator session token",
-    });
+  /** Issues a real single-use ticket and returns the gateway path that presents it. */
+  const ticketPath = (serverId: string, extraQuery?: string): string => {
+    const t = TicketService.issueTicket("test-operator", serverId, { ttlSeconds: 60, purpose: "terminal_shell" });
+    return `/terminal?ticket=${encodeURIComponent(t.ticket)}${extraQuery ? `&${extraQuery}` : ""}`;
+  };
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=bad-token`);
+  it("rejects an invalid or already-consumed ticket", async () => {
+    const client = await createClient(`/terminal?ticket=tkt_does-not-exist`);
     const msg = await client.nextMessage();
 
     expect(msg.type).toBe("error");
@@ -149,13 +151,58 @@ describe("TerminalGateway WebSocket Transport", () => {
     expect(closeCode).toBe(1008);
   });
 
-  it("rejects connection when target server is not found in inventory", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
+  it("rejects every ?token= credential (including the legacy dev literal and a real session token) with 1008", async () => {
+    const createSpy = vi.spyOn(SSHAdapter, "createInteractiveSession");
+    const realSession = AuthService.createOperatorSession("op-real", 1);
 
-    const client = await createClient(`/terminal?serverId=non-existent-server&token=valid-token`);
+    for (const token of ["local-operator-token", "bad-token", realSession.token]) {
+      const client = await createClient(`/terminal?serverId=${mockServer.id}&token=${encodeURIComponent(token)}`);
+      const msg = await client.nextMessage();
+      expect(msg.type).toBe("error");
+      expect(msg.error).toContain("Authentication failed");
+      expect(await client.waitForClose()).toBe(1008);
+    }
+
+    // Header-carried tokens are rejected too.
+    const headerWs = new WebSocket(`ws://127.0.0.1:${gatewayPort}/terminal?serverId=${mockServer.id}`, {
+      headers: { Authorization: `Bearer ${realSession.token}` },
+    });
+    const headerClose = await new Promise<number>((resolve) => headerWs.on("close", (code) => resolve(code)));
+    expect(headerClose).toBe(1008);
+
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(gateway.getActiveSessionCount()).toBe(0);
+  });
+
+  it("rejects an auth frame that carries a token instead of a ticket", async () => {
+    const createSpy = vi.spyOn(SSHAdapter, "createInteractiveSession");
+    const client = await createClient(`/terminal`);
+    client.send(JSON.stringify({ type: "auth", token: "local-operator-token", serverId: mockServer.id }));
+
+    const msg = await client.nextMessage();
+    expect(msg.type).toBe("error");
+    expect(await client.waitForClose()).toBe(1008);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("authenticates via an auth frame carrying a valid ticket", async () => {
+    vi.spyOn(SSHAdapter, "createInteractiveSession").mockImplementation(async (sessionId, server) => ({
+      sessionId,
+      serverId: server.id,
+    }));
+    const t = TicketService.issueTicket("test-operator", mockServer.id, { ttlSeconds: 60, purpose: "terminal_shell" });
+
+    const client = await createClient(`/terminal`);
+    client.send(JSON.stringify({ type: "auth", ticket: t.ticket, cols: 90, rows: 33 }));
+
+    const connMsg = await client.nextMessage();
+    expect(connMsg.type).toBe("connected");
+    expect(connMsg.serverId).toBe(mockServer.id);
+    client.close();
+  });
+
+  it("rejects connection when target server is not found in inventory", async () => {
+    const client = await createClient(ticketPath("non-existent-server"));
     const msg = await client.nextMessage();
 
     expect(msg.type).toBe("error");
@@ -166,11 +213,6 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("streams input and output bidirectionally between WebSocket client and SSH PTY", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     let capturedOnData: ((chunk: Buffer) => void) | undefined;
     const createSpy = vi
       .spyOn(SSHAdapter, "createInteractiveSession")
@@ -181,7 +223,7 @@ describe("TerminalGateway WebSocket Transport", () => {
 
     const sendInputSpy = vi.spyOn(SSHAdapter, "sendInput").mockReturnValue(true);
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token&cols=100&rows=30`);
+    const client = await createClient(ticketPath(mockServer.id, "cols=100&rows=30"));
 
     const connMsg = await client.nextMessage();
     expect(connMsg.type).toBe("connected");
@@ -207,11 +249,6 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("propagates terminal resize events to SSH PTY with boundary validation", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     vi.spyOn(SSHAdapter, "createInteractiveSession").mockResolvedValue({
       sessionId: "test-sess",
       serverId: mockServer.id,
@@ -219,7 +256,7 @@ describe("TerminalGateway WebSocket Transport", () => {
 
     const resizeSpy = vi.spyOn(SSHAdapter, "resizeSession").mockReturnValue(true);
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client = await createClient(ticketPath(mockServer.id));
     await client.nextMessage(); // connected frame
 
     // Send valid resize
@@ -236,11 +273,6 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("transfers complex ANSI escape sequences and multi-byte Unicode strings with fidelity", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     let capturedOnData: ((chunk: Buffer) => void) | undefined;
     vi.spyOn(SSHAdapter, "createInteractiveSession").mockImplementation(
       async (sessionId, server, options?: CreateSessionOptions) => {
@@ -249,7 +281,7 @@ describe("TerminalGateway WebSocket Transport", () => {
       }
     );
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client = await createClient(ticketPath(mockServer.id));
     await client.nextMessage(); // connected frame
 
     const testPayload = "\x1b[38;2;255;100;0m🔥 PraxelOps Quantum Node — 宇宙 [한국어 / 日本語] \x1b[0m\r\n";
@@ -263,11 +295,6 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("handles multiple simultaneous independent terminal sessions without cross-talk", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     const callbacks = new Map<string, (chunk: Buffer) => void>();
 
     vi.spyOn(SSHAdapter, "createInteractiveSession").mockImplementation(
@@ -279,10 +306,10 @@ describe("TerminalGateway WebSocket Transport", () => {
       }
     );
 
-    const client1 = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client1 = await createClient(ticketPath(mockServer.id));
     const conn1 = await client1.nextMessage();
 
-    const client2 = await createClient(`/terminal?serverId=${mockServer2.id}&token=valid-token`);
+    const client2 = await createClient(ticketPath(mockServer2.id));
     const conn2 = await client2.nextMessage();
 
     expect(conn1.sessionId).not.toBe(conn2.sessionId);
@@ -300,17 +327,12 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("enforces maximum inbound message payload limits", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     vi.spyOn(SSHAdapter, "createInteractiveSession").mockResolvedValue({
       sessionId: "test-sess",
       serverId: mockServer.id,
     });
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client = await createClient(ticketPath(mockServer.id));
     await client.nextMessage(); // connected frame
 
     const giantPayload = JSON.stringify({
@@ -328,16 +350,11 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("rejects connection and cleans up when SSH host-key verification fails", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     vi.spyOn(SSHAdapter, "createInteractiveSession").mockRejectedValue(
       new Error("SSH_HOST_KEY_MISMATCH: Fingerprint altered from known_hosts")
     );
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client = await createClient(ticketPath(mockServer.id));
     const msg = await client.nextMessage();
 
     expect(msg.type).toBe("error");
@@ -348,11 +365,6 @@ describe("TerminalGateway WebSocket Transport", () => {
   });
 
   it("cleans up SSH channels and audit logs when client disconnects or closes session", async () => {
-    vi.spyOn(AuthService, "verifyToken").mockReturnValue({
-      valid: true,
-      operatorId: "test-operator",
-    });
-
     const closeSessionSpy = vi.spyOn(SSHAdapter, "closeSession");
     const auditSpy = vi.spyOn(StorageService, "logAuditEvent");
 
@@ -361,7 +373,7 @@ describe("TerminalGateway WebSocket Transport", () => {
       serverId: mockServer.id,
     });
 
-    const client = await createClient(`/terminal?serverId=${mockServer.id}&token=valid-token`);
+    const client = await createClient(ticketPath(mockServer.id));
     const connMsg = await client.nextMessage();
 
     expect(gateway.getActiveSessionCount()).toBe(1);
@@ -407,7 +419,10 @@ describe("TerminalGateway WebSocket Transport", () => {
     }
   });
 
-  it("enforces single-use ticket and rejects raw query tokens in production mode", async () => {
+  it("rejects raw query tokens in production mode even when the token is a VALID session token", async () => {
+    // A real, live session: if the token guard were removed this credential would be usable.
+    const realSession = AuthService.createOperatorSession("op-prod", 1);
+    const createSpy = vi.spyOn(SSHAdapter, "createInteractiveSession");
     const origEnv = process.env.NODE_ENV;
     try {
       (process.env as Record<string, string | undefined>).NODE_ENV = "production";
@@ -418,21 +433,61 @@ describe("TerminalGateway WebSocket Transport", () => {
       });
       const p = await gw.listen();
 
-      const ws = new WebSocket(`ws://127.0.0.1:${p}/terminal?serverId=${mockServer.id}&token=some-token`, {
-        headers: { Origin: "http://localhost:3000" },
-      });
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${p}/terminal?serverId=${mockServer.id}&token=${encodeURIComponent(realSession.token)}`,
+        { headers: { Origin: "http://localhost:3000" } }
+      );
 
-      const codePromise = new Promise<number>((resolve) => {
-        ws.on("close", (code) => resolve(code));
+      const code = await new Promise<number>((resolve) => {
+        ws.on("close", (c) => resolve(c));
       });
-
-      const code = await codePromise;
       expect(code).toBe(1008);
+      expect(createSpy).not.toHaveBeenCalled();
+      expect(gw.getActiveSessionCount()).toBe(0);
 
       await gw.close();
     } finally {
       (process.env as Record<string, string | undefined>).NODE_ENV = origEnv;
     }
+  });
+
+  it("accepts a valid single-use ticket in production mode and refuses its replay", async () => {
+    vi.spyOn(SSHAdapter, "createInteractiveSession").mockImplementation(async (sessionId, server) => ({
+      sessionId,
+      serverId: server.id,
+    }));
+    const origin = "https://ops.example.com";
+    const t = TicketService.issueTicket("op-prod", mockServer.id, { ttlSeconds: 60, purpose: "terminal_shell", origin });
+    const origEnv = process.env.NODE_ENV;
+    try {
+      (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+      const gw = new TerminalGateway({ port: 0, allowedOrigins: [origin] });
+      const p = await gw.listen();
+      const url = `ws://127.0.0.1:${p}/terminal?ticket=${encodeURIComponent(t.ticket)}`;
+
+      const ws = new WebSocket(url, { headers: { Origin: origin } });
+      const first = await new Promise<{ type?: string }>((resolve, reject) => {
+        ws.once("message", (raw) => resolve(JSON.parse(raw.toString("utf-8"))));
+        ws.once("error", reject);
+      });
+      expect(first.type).toBe("connected");
+      ws.close();
+
+      const replay = new WebSocket(url, { headers: { Origin: origin } });
+      const replayCode = await new Promise<number>((resolve) => replay.on("close", (c) => resolve(c)));
+      expect(replayCode).toBe(1008);
+
+      await gw.close();
+    } finally {
+      (process.env as Record<string, string | undefined>).NODE_ENV = origEnv;
+    }
+  });
+
+  it("refuses to start in production without ALLOWED_ORIGINS", () => {
+    expect(getGatewayStartupError({ NODE_ENV: "production" })).toContain("ALLOWED_ORIGINS");
+    expect(getGatewayStartupError({ NODE_ENV: "production", ALLOWED_ORIGINS: " , " })).toContain("ALLOWED_ORIGINS");
+    expect(getGatewayStartupError({ NODE_ENV: "production", ALLOWED_ORIGINS: "https://ops.example.com" })).toBeNull();
+    expect(getGatewayStartupError({ NODE_ENV: "development" })).toBeNull();
   });
 
   it("validates client IP from X-Forwarded-For only when peer is a trusted proxy", () => {

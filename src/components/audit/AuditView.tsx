@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { AuditEvent, AuditEventType } from "@/types/audit";
+import { apiFetch } from "@/lib/client/api";
 
 export const AuditView: React.FC = () => {
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -25,7 +26,7 @@ export const AuditView: React.FC = () => {
 
   const fetchAuditEvents = async () => {
     try {
-      const res = await fetch("/api/audit?limit=200");
+      const res = await apiFetch("/api/audit?limit=200");
       const data = await res.json();
       if (data.success) {
         setEvents(data.data);
