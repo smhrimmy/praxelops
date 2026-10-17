@@ -14,43 +14,50 @@
       "id": "macos-studio",
       "name": "macOS Studio Desktop Shell",
       "status": "in-progress",
-      "path": "src/components/macos"
+      "path": "src/components/macos",
+      "notes": "Shell, menu bar, sidebar, traffic lights, command palette, theming and the M6.3 login screen are implemented. No browser-level UI tests; login UI not browser-tested (see PROJECT_STATUS.md 7.6)."
     },
     {
       "id": "ssh-core",
       "name": "SSH Connection & Terminal Multiplexer",
-      "status": "planned",
-      "path": "src/lib/ssh"
+      "status": "in-progress",
+      "path": "src/lib/ssh",
+      "notes": "Implemented: ssh2 adapter (exec, PTY), authenticated WebSocket terminal gateway (single-use file-backed tickets, Origin checks, session caps, pre-auth limits), TOFU known-hosts (fail-closed on corrupt store), two-process production E2E. Limitations: no external-host validation (blocked), TOFU enrollment is automatic, Windows-only evidence. See PROJECT_STATUS.md 7.6."
     },
     {
       "id": "sftp-browser",
       "name": "SFTP Remote File Browser",
-      "status": "planned",
-      "path": "src/lib/sftp"
+      "status": "in-progress",
+      "path": "src/lib/sftp",
+      "notes": "Read-only browsing and file preview exist (SSHAdapter.listSFTPDirectory/readSFTPFile in src/lib/ssh/adapter.ts, /api/sftp, src/components/sftp). No src/lib/sftp module, no upload/download queue. Verified only against the in-process ssh2 fixture."
     },
     {
       "id": "telemetry-engine",
       "name": "Server Inventory & Live Telemetry",
       "status": "planned",
-      "path": "src/lib/telemetry"
+      "path": "src/lib/telemetry",
+      "notes": "Server inventory (CRUD, UI, credentials stripped from responses) exists. No live telemetry collector or poller exists and src/lib/telemetry is absent; metrics are shown as unpolled unless present (only the explicit demo loader sets them)."
     },
     {
       "id": "ai-copilot",
       "name": "AI Diagnostics & Guarded Command Generator",
-      "status": "planned",
-      "path": "src/lib/ai"
+      "status": "in-progress",
+      "path": "src/lib/ai",
+      "notes": "Rule-based diagnostics, typed operation policy and HMAC-signed, single-use, expiring proposals with an explicit approval route exist (src/lib/ai). No LLM provider adapter."
     },
     {
       "id": "deployment-runner",
       "name": "Deployment Workflows & Log Streaming",
-      "status": "planned",
-      "path": "src/lib/deployments"
+      "status": "in-progress",
+      "path": "src/lib/deployments",
+      "notes": "Runner executes workflow steps over SSH with per-step output capture, a rollback command, an API route and UI (src/lib/deployments/runner.ts, /api/deployments). No dedicated tests in the suite, no live log streaming."
     },
     {
       "id": "audit-security",
       "name": "Security Verification & Audit Trail",
-      "status": "planned",
-      "path": "src/lib/security"
+      "status": "in-progress",
+      "path": "src/lib/security",
+      "notes": "Implemented in src/lib/security and src/lib/storage: operator login (scrypt), cookie sessions, CSRF and exact Origin/Host allowlists, ticket service, rate limiting, secret redaction, atomic locked JSON stores, audit events. Limitations: audit log is a locked JSON array without a hash chain, credentials are plaintext at rest, sessions are in memory. See PROJECT_STATUS.md 7.6."
     }
   ],
   "frozenContracts": [
