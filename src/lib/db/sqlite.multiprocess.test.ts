@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { closeDb } from "./database";
 import { TicketService } from "../security/ticket";
+import { StorageService } from "../storage";
 
 const WORKER = path.resolve(__dirname, "fixtures", "sqliteWorker.mjs");
 const PROCESSES = 6;
@@ -201,8 +202,44 @@ describe("SQLite real multi-process behaviour", () => {
           expect(count("diagnostics")).toBe(7);
           expect(count("proposals")).toBe(3);
           expect(count("meta")).toBe(1);
-          expect(count("schema_migrations")).toBe(1);
+          expect(count("schema_migrations")).toBe(2); // versions 1 and 2, each applied exactly once
         });
+      });
+    },
+    180_000
+  );
+
+  it(
+    "(d) 4 processes first-using the credential vault at once: exactly one DEK is created and every process reads every other's credentials",
+    async () => {
+      await withTempDirs(async (dataDir, ctlDir) => {
+        const PER = 5;
+        const labels = ["a", "b", "c", "d"];
+        const reports = await runSimultaneously<{ saved: string[]; readable: number; errors: string[] }>(
+          dataDir,
+          ctlDir,
+          labels.map((label) => ({ role: "vault", args: [label, String(PER)] }))
+        );
+        for (const r of reports) {
+          expect(r.errors).toEqual([]);
+          expect(r.saved).toHaveLength(PER);
+          expect(r.readable).toBe(PER);
+        }
+
+        query(dataDir, (db) => {
+          const rows = db.prepare("SELECT key FROM meta WHERE key LIKE 'vault_%' ORDER BY key").all();
+          expect(rows.map((r) => String(r.key))).toEqual(["vault_dek_v1", "vault_kek_salt", "vault_key_check"]);
+          expect(Number(db.prepare("SELECT COUNT(*) AS n FROM servers").get()?.n)).toBe(PER * labels.length);
+        });
+
+        // One DEK means this process (which unwraps independently) can decrypt what all four wrote.
+        const all = StorageService.getServers();
+        expect(all).toHaveLength(PER * labels.length);
+        for (const server of all) {
+          const record = server as unknown as Record<string, unknown>;
+          expect(record.password).toBe(`pw-${server.id.slice("srv-".length)}`);
+          expect(record.privateKey).toBe(`KEY-${server.id.slice("srv-".length)}`);
+        }
       });
     },
     180_000

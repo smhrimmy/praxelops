@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 // NOTE: node builtins / relative .ts imports and erasable-only syntax (loaded by plain node via create-operator.ts).
 import { runRawTransaction } from "./sqliteUtil.ts";
+import { encryptPlaintextCredentials } from "../security/vault.ts";
 
 export interface Migration {
   /** Strictly increasing, starting at 1. Never renumber or edit a released migration; append a new one. */
@@ -8,12 +9,17 @@ export interface Migration {
   name: string;
   /** Runs inside the migration transaction (BEGIN IMMEDIATE already held). */
   up: (db: DatabaseSync) => void;
+  /**
+   * Set when `up` rewrites secret-bearing rows in place. SQLite keeps the replaced bytes in free space, so the
+   * database layer then scrubs them (VACUUM + WAL truncate) right after the migration transaction commits.
+   */
+  scrubAfter?: boolean;
 }
 
 /**
  * Schema notes for upcoming milestones:
- *  - servers.password / private_key / passphrase are deliberately separate columns so a later migration can
- *    replace them with encrypted columns without touching the JSON `data` blob.
+ *  - servers.password / private_key / passphrase are deliberately separate columns (migration 2 encrypts them in
+ *    place as `enc:v1:` envelope-encrypted values; see src/lib/security/vault.ts) without touching the JSON `data` blob.
  *  - audit_events is append-only with a monotonically increasing `seq`; a later migration will
  *    `ALTER TABLE audit_events ADD COLUMN prev_hash TEXT` / `hash TEXT` for the tamper-evident chain.
  */
@@ -105,6 +111,16 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    name: "encrypt_server_credentials",
+    scrubAfter: true,
+    // Encrypts any plaintext servers.password / private_key / passphrase in place, in the migration transaction.
+    // Needs the master secret (PRAXELOPS_SECRET) only if there is at least one plaintext credential to encrypt.
+    up: (db) => {
+      encryptPlaintextCredentials(db);
+    },
+  },
 ];
 
 export const LATEST_VERSION: number = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);
@@ -135,19 +151,20 @@ function assertNotNewer(applied: readonly number[], latest: number): void {
 /**
  * Brings the schema up to LATEST_VERSION. Safe to call repeatedly and from several processes at once:
  * the work happens in one BEGIN IMMEDIATE transaction that re-checks the applied versions, so a process that
- * loses the race finds everything already applied and does nothing.
+ * loses the race finds everything already applied and does nothing. Returns the migrations this call applied.
  */
-export function runMigrations(db: DatabaseSync, migrations: readonly Migration[] = MIGRATIONS): void {
+export function runMigrations(db: DatabaseSync, migrations: readonly Migration[] = MIGRATIONS): Migration[] {
   const latest = migrations.reduce((max, m) => Math.max(max, m.version), 0);
 
   // Fast path (read only): already up to date.
   if (migrationsTableExists(db)) {
     const applied = appliedVersions(db);
     assertNotNewer(applied, latest);
-    if (applied.length > 0 && applied[applied.length - 1] >= latest) return;
+    if (applied.length > 0 && applied[applied.length - 1] >= latest) return [];
   }
 
-  runRawTransaction(db, () => {
+  return runRawTransaction(db, () => {
+    const ran: Migration[] = [];
     db.exec(CREATE_MIGRATIONS_TABLE);
     const applied = appliedVersions(db);
     assertNotNewer(applied, latest);
@@ -157,6 +174,8 @@ export function runMigrations(db: DatabaseSync, migrations: readonly Migration[]
       if (done.has(migration.version)) continue;
       migration.up(db);
       insert.run(migration.version, new Date().toISOString());
+      ran.push(migration);
     }
+    return ran;
   });
 }

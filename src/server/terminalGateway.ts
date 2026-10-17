@@ -7,7 +7,9 @@ import { z } from "zod";
 import { SSHAdapter } from "@/lib/ssh/adapter";
 import { StorageService } from "@/lib/storage";
 import { TicketService } from "@/lib/security/ticket";
+import { VaultError } from "@/lib/security/vault";
 import type { AuditEvent } from "@/types/audit";
+import type { ServerHost } from "@/types/server";
 
 export interface TerminalGatewayConfig {
   port?: number;
@@ -600,7 +602,26 @@ export class TerminalGateway {
     const serverId = ticketData.serverId;
 
     // 2. Resolve target server from inventory (prevents open proxying)
-    const server = StorageService.getServerById(serverId);
+    let server: ServerHost | undefined;
+    try {
+      server = StorageService.getServerById(serverId);
+    } catch (error) {
+      if (!(error instanceof VaultError)) throw error;
+      // The stored credentials cannot be decrypted (wrong PRAXELOPS_SECRET or tampered data). Refuse this one
+      // connection cleanly; never log key material or plaintext, and do not leak details to the client.
+      console.error("[TerminalGateway] Credential vault error:", error.message);
+      this.safeAudit({
+        actor: operatorId,
+        eventType: "ssh_connect",
+        targetServerId: serverId,
+        status: "failure",
+        ipAddress: clientIp,
+        details: { reason: "credential_decryption_failed", transport: "websocket_gateway" },
+      });
+      this.sendSafeError(ws, "SSH Connection Failed: stored server credentials could not be decrypted; contact an administrator");
+      ws.close(1011, "Credential error");
+      return null;
+    }
     if (!server) {
       this.safeAudit({
         actor: operatorId,

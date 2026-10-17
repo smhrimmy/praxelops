@@ -10,6 +10,7 @@ import {
 import { SSHAdapter, CreateSessionOptions } from "@/lib/ssh/adapter";
 import { StorageService } from "@/lib/storage";
 import { TicketService, IssueTicketOptions } from "@/lib/security/ticket";
+import { VaultError } from "@/lib/security/vault";
 import { startTestSshServer, TestSshServerInstance } from "@/lib/ssh/testSshServer";
 import type { ServerHost } from "@/types/server";
 import type { AuditEvent } from "@/types/audit";
@@ -780,6 +781,43 @@ describe("TerminalGateway hardening", () => {
       // still accepting connections afterwards
       const again = await connect(port, q(ticketFor("op-resilient")));
       expect((await again.nextFrame()).type).toBe("connected");
+    });
+  });
+  // ---------------------------------------------------------------- credential vault (Milestone 7.2)
+  describe("undecryptable server credentials", () => {
+    it("refuses that one connection cleanly (generic client error, audited, gateway keeps serving)", async () => {
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      const createSpy = vi
+        .spyOn(SSHAdapter, "createInteractiveSession")
+        .mockImplementation(async (sessionId, server) => ({ sessionId, serverId: server.id }));
+      vi.spyOn(StorageService, "getServerById").mockImplementation((id: string) => {
+        if (id === "srv-broken") {
+          throw new VaultError("Credential decryption failed - PRAXELOPS_SECRET differs from the one used to encrypt, or data was tampered");
+        }
+        return id === SRV.id ? SRV : undefined;
+      });
+      const { port } = await startGateway();
+
+      const bad = await connect(port, q(ticketFor("op-v", "srv-broken")));
+      const frame = await bad.nextFrame();
+      expect(frame.type).toBe("error");
+      expect(String(frame.error)).toMatch(/could not be decrypted/);
+      expect(String(frame.error)).not.toMatch(/PRAXELOPS_SECRET/);
+      await vi.waitFor(() => expect(bad.closed).toBe(true), WAIT);
+      expect(createSpy).not.toHaveBeenCalled();
+      expect(auditEvents()).toContainEqual(
+        expect.objectContaining({
+          eventType: "ssh_connect",
+          status: "failure",
+          targetServerId: "srv-broken",
+          details: expect.objectContaining({ reason: "credential_decryption_failed" }),
+        })
+      );
+      expect(errorLog).toHaveBeenCalled();
+
+      // The gateway process survives and still serves other servers.
+      const good = await connect(port, q(ticketFor("op-v")));
+      expect((await good.nextFrame()).type).toBe("connected");
     });
   });
 });

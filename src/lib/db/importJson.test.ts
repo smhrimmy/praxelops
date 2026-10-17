@@ -175,7 +175,7 @@ describe("legacy JSON import", () => {
       // Secrets live in their own columns, not in the JSON blob.
       const raw = getDb().prepare("SELECT data, password, private_key, passphrase FROM servers WHERE id = ?").get("srv-legacy-2");
       expect(String(raw?.data)).not.toContain("LEGACY-PRIVATE-KEY");
-      expect(raw?.private_key).toBe("LEGACY-PRIVATE-KEY");
+      expect(String(raw?.private_key)).toMatch(/^enc:v1:/); // encrypted on the way in, never stored as plaintext
 
       // Same newest-first order as the legacy file, and seq increases with age.
       const audit = StorageService.getAuditEvents();

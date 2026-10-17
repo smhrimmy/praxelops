@@ -4,6 +4,7 @@
 //   consume <ticketsFile>      attempt to consume every ticket id listed in the JSON file, in order
 //   audit   <count> <label>    append <count> audit events
 //   open                       first-open the database (runs migrations + legacy JSON import)
+//   vault   <label> <count>    save <count> servers with credentials (the very first one creates the credential vault)
 //
 // Every role first writes <ctlDir>/ready-<pid> and then spins until <ctlDir>/go exists, so that all children
 // start their real work at the same moment.
@@ -85,6 +86,46 @@ if (role === "consume") {
   }
   closeDb();
   report({ role, pid: process.pid, errors });
+} else if (role === "vault") {
+  const label = args[0];
+  const count = Number(args[1]);
+  const saved = [];
+  const errors = [];
+  for (let i = 0; i < count; i++) {
+    const id = `srv-${label}-${i}`;
+    try {
+      StorageService.saveServer({
+        id,
+        name: id,
+        host: "10.0.0.9",
+        port: 22,
+        username: "u",
+        authType: "password",
+        tags: [],
+        password: `pw-${label}-${i}`,
+        privateKey: `KEY-${label}-${i}`,
+        status: "offline",
+        osType: "linux",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+      saved.push(id);
+    } catch (err) {
+      errors.push(message(err));
+    }
+  }
+  // Read back what this process wrote through its own (independently unwrapped) key.
+  let readable = 0;
+  for (const id of saved) {
+    try {
+      const s = StorageService.getServerById(id);
+      if (s && s.password === `pw-${label}-${id.split("-").pop()}`) readable++;
+    } catch (err) {
+      errors.push(message(err));
+    }
+  }
+  closeDb();
+  report({ role, pid: process.pid, saved, readable, errors });
 } else {
   process.stderr.write(`unknown role ${role}`);
   process.exit(2);

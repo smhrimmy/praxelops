@@ -1,10 +1,27 @@
 import { DeploymentWorkflow, DeploymentStep } from "@/types/deployment";
 import { StorageService } from "@/lib/storage";
 import { SSHAdapter } from "@/lib/ssh/adapter";
+import { VaultError } from "@/lib/security/vault";
 
 export class DeploymentRunner {
   static async runWorkflow(workflow: DeploymentWorkflow): Promise<DeploymentWorkflow> {
-    const server = StorageService.getServerById(workflow.serverId);
+    let server;
+    try {
+      server = StorageService.getServerById(workflow.serverId);
+    } catch (error) {
+      if (!(error instanceof VaultError)) throw error;
+      // Credentials cannot be decrypted (wrong PRAXELOPS_SECRET / tampering): fail the workflow cleanly.
+      workflow.status = "failed";
+      StorageService.saveDeployment(workflow);
+      StorageService.logAuditEvent({
+        actor: "operator",
+        eventType: "deployment_triggered",
+        targetServerId: workflow.serverId,
+        status: "failure",
+        details: { workflowId: workflow.id, reason: "credential_decryption_failed" },
+      });
+      return workflow;
+    }
     if (!server) {
       workflow.status = "failed";
       StorageService.saveDeployment(workflow);

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
 import { ServerHostSchema } from "@/types/server";
-import { toPublicServer, toPublicServers } from "@/lib/servers/publicServer";
+import { toPublicServer } from "@/lib/servers/publicServer";
 
 // Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
 export const runtime = "nodejs";
@@ -19,8 +19,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
     }
 
-    const servers = StorageService.getServers();
-    return NextResponse.json({ success: true, data: toPublicServers(servers) });
+    // Never decrypts credentials: the listing only needs presence flags.
+    return NextResponse.json({ success: true, data: StorageService.getPublicServers() });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },
@@ -90,7 +90,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ success: false, error: "Server ID is required" }, { status: 400 });
     }
 
-    const server = StorageService.getServerById(id);
+    const server = StorageService.getPublicServerById(id);
     const removed = StorageService.deleteServer(id);
     if (!removed) {
       return NextResponse.json({ success: false, error: "Server not found" }, { status: 404 });

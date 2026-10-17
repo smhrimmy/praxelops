@@ -53,7 +53,8 @@ export async function POST(request: Request) {
     }
 
     const parsed = TriggerDeploymentSchema.parse(body);
-    const server = StorageService.getServerById(parsed.serverId);
+    // Only id/name are needed here; credentials are decrypted later by the runner.
+    const server = StorageService.getPublicServerById(parsed.serverId);
     if (!server) {
       return NextResponse.json(
         { success: false, error: "Target server not found" },

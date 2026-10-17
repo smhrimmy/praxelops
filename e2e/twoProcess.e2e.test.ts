@@ -569,12 +569,13 @@ function assertAuditHasNoSecrets(): void {
     expect(rawAudit).not.toContain(ticket);
   }
 
-  // Whole-file scan (database + WAL). The operator's plaintext password is never stored, and tickets are stored
-  // only as digests, so neither may appear anywhere. The SSH password is deliberately NOT scanned here: until
-  // Milestone 7 step 2 encrypts credentials it lives (by design) in the servers.password column.
+  // Whole-file scan (database + WAL). The operator's plaintext password is never stored, tickets are stored only
+  // as digests, and (since Milestone 7.2) the SSH password is envelope-encrypted in servers.password, so none of
+  // them may appear anywhere in the raw bytes.
   const raw = rawDatabaseBytes();
   expect(raw.length).toBeGreaterThan(0);
   expect(raw).not.toContain(operatorPassword);
+  expect(raw).not.toContain(sshPassword);
   for (const ticket of issuedTickets) {
     expect(raw).not.toContain(ticket);
   }

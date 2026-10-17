@@ -1,19 +1,23 @@
 import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { ServerHost } from "@/types/server";
+import type { PublicServer } from "@/lib/servers/publicServer";
 import type { AuditEvent } from "@/types/audit";
 import type { AIOperationProposal, ServerDiagnosticReport } from "@/types/ai";
 import type { DeploymentWorkflow } from "@/types/deployment";
 // NOTE: only `import type` for "@/..." aliases and relative .ts imports for values, so plain node
 // (`--experimental-strip-types`, used by the multi-process test fixtures) can load this module.
 import { getDb, prepare, withTransaction } from "../db/database.ts";
+import { getVaultDek } from "../security/vault.ts";
 import {
   AUDIT_INSERT_SQL,
   auditToParams,
   docString,
   rowToAudit,
   rowToDoc,
+  rowToPublicServer,
   rowToServer,
+  SERVER_SELECT_COLUMNS,
   serverToRow,
   type SqlRow,
 } from "../db/records.ts";
@@ -33,29 +37,52 @@ export interface AuditQueryOptions {
   offset?: number;
 }
 
+function hasCredentials(server: ServerHost): boolean {
+  const record = server as unknown as Record<string, unknown>;
+  return ["password", "privateKey", "passphrase"].some((k) => typeof record[k] === "string" && record[k] !== "");
+}
+
 function upsertServer(db: DatabaseSync, server: ServerHost): void {
-  const row = serverToRow(server);
+  const row = serverToRow(server, db);
   prepare(db, UPSERT_SERVER_SQL).run(row.id, row.data, row.password, row.privateKey, row.passphrase);
 }
 
 export class StorageService {
   /**
-   * Returns servers from persistent storage (insertion order).
+   * Returns servers from persistent storage (insertion order), with credentials DECRYPTED.
+   * Throws VaultError if any credential cannot be decrypted; use getPublicServers() when secrets are not needed.
    * NEVER injects hardcoded fake servers into normal production state.
    */
   static getServers(): ServerHost[] {
     const db = getDb();
-    const rows = prepare(db, "SELECT id, data, password, private_key, passphrase FROM servers ORDER BY rowid").all();
-    return rows.map((row) => rowToServer(row as SqlRow));
+    const rows = prepare(db, `SELECT ${SERVER_SELECT_COLUMNS} FROM servers ORDER BY rowid`).all();
+    return rows.map((row) => rowToServer(row as SqlRow, db));
   }
 
+  /** Returns the server with its credentials DECRYPTED (for the SSH adapter). Throws VaultError on failure. */
   static getServerById(id: string): ServerHost | undefined {
     const db = getDb();
-    const row = prepare(db, "SELECT id, data, password, private_key, passphrase FROM servers WHERE id = ?").get(id);
-    return row === undefined ? undefined : rowToServer(row as SqlRow);
+    const row = prepare(db, `SELECT ${SERVER_SELECT_COLUMNS} FROM servers WHERE id = ?`).get(id);
+    return row === undefined ? undefined : rowToServer(row as SqlRow, db);
+  }
+
+  /** API-safe listing: never decrypts, so it works (and stays secret-free) even if the vault cannot be unlocked. */
+  static getPublicServers(): PublicServer[] {
+    const db = getDb();
+    const rows = prepare(db, `SELECT ${SERVER_SELECT_COLUMNS} FROM servers ORDER BY rowid`).all();
+    return rows.map((row) => rowToPublicServer(row as SqlRow));
+  }
+
+  /** API-safe single lookup (no decryption); use when only existence / name / host are needed. */
+  static getPublicServerById(id: string): PublicServer | undefined {
+    const db = getDb();
+    const row = prepare(db, `SELECT ${SERVER_SELECT_COLUMNS} FROM servers WHERE id = ?`).get(id);
+    return row === undefined ? undefined : rowToPublicServer(row as SqlRow);
   }
 
   static saveServer(server: ServerHost): void {
+    // Create/unlock the vault before the write transaction so its DEK is cached for this and later calls.
+    if (hasCredentials(server)) getVaultDek(getDb());
     withTransaction((db) => {
       upsertServer(db, server);
     });

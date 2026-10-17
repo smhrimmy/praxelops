@@ -31,7 +31,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const server = StorageService.getServerById(serverId);
+    // Credentials are not needed to issue a ticket (the gateway decrypts them at connect time).
+    const server = StorageService.getPublicServerById(serverId);
     if (!server) {
       return NextResponse.json(
         { success: false, error: `Server '${serverId}' not found in fleet inventory` },

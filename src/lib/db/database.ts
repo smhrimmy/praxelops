@@ -6,7 +6,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 // can load this module and everything it imports.
 import { getDataDir } from "../storage/dataDir.ts";
 import { runMigrations } from "./migrations.ts";
-import { importLegacyJsonIfNeeded } from "./importJson.ts";
+import { importLegacyJsonIfNeeded, warnLegacyPlaintextOnce } from "./importJson.ts";
 import {
   beginImmediate,
   isThenable,
@@ -73,6 +73,32 @@ function ensureDbFile(dbPath: string): void {
   fs.chmodSync(dbPath, 0o600);
 }
 
+function hasStoredCredentials(db: DatabaseSync): boolean {
+  return (
+    db
+      .prepare("SELECT 1 AS present FROM servers WHERE password IS NOT NULL OR private_key IS NOT NULL OR passphrase IS NOT NULL LIMIT 1")
+      .get() !== undefined
+  );
+}
+
+/**
+ * After a migration rewrote credentials in place (plaintext -> ciphertext), the old plaintext bytes are still in the
+ * database file's free space and possibly in WAL frames. VACUUM rewrites the file; the TRUNCATE checkpoint then
+ * empties the WAL. Best effort: a failure (e.g. another process holding a long read) leaves data intact and warns.
+ */
+function scrubFreedSpace(db: DatabaseSync): void {
+  try {
+    withBusyRetry(() => db.exec("VACUUM"), OPEN_MAX_ATTEMPTS);
+    withBusyRetry(() => db.exec("PRAGMA wal_checkpoint(TRUNCATE)"), OPEN_MAX_ATTEMPTS);
+  } catch (err) {
+    console.warn(
+      `[PraxelOps] Could not scrub superseded plaintext credential bytes from the database after encrypting them: ${
+        err instanceof Error ? err.message : String(err)
+      }. Run VACUUM on praxelops.db while the app is stopped.`
+    );
+  }
+}
+
 function openAndInitialize(dbPath: string): DbEntry {
   const dataDir = path.dirname(dbPath);
   ensureDataDir(dataDir);
@@ -85,9 +111,13 @@ function openAndInitialize(dbPath: string): DbEntry {
     withBusyRetry(() => db.exec("PRAGMA journal_mode = WAL"), OPEN_MAX_ATTEMPTS);
     db.exec("PRAGMA synchronous = NORMAL");
     db.exec("PRAGMA foreign_keys = ON");
-    withBusyRetry(() => runMigrations(db), OPEN_MAX_ATTEMPTS);
+    // Zero-fill deleted/replaced content so superseded credential bytes do not linger in free space.
+    db.exec("PRAGMA secure_delete = ON");
+    const applied = withBusyRetry(() => runMigrations(db), OPEN_MAX_ATTEMPTS);
+    if (applied.some((m) => m.scrubAfter === true) && hasStoredCredentials(db)) scrubFreedSpace(db);
     // Imports the legacy JSON stores exactly once (atomically, under BEGIN IMMEDIATE); throws if any is corrupt.
     withBusyRetry(() => importLegacyJsonIfNeeded(db, dataDir), OPEN_MAX_ATTEMPTS);
+    warnLegacyPlaintextOnce(db, dataDir);
   } catch (err) {
     try {
       db.close();

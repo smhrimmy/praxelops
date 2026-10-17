@@ -82,9 +82,11 @@ describe("StorageService", () => {
     const row = getDb()
       .prepare("SELECT data, password, private_key, passphrase FROM servers WHERE id = ?")
       .get("srv-secret");
-    expect(row?.password).toBe("pw-123");
-    expect(row?.private_key).toBe("KEY-ABC");
-    expect(row?.passphrase).toBe("pp-456");
+    // Credentials are envelope-encrypted at rest (see vault.test.ts for the full coverage).
+    expect(String(row?.password)).toMatch(/^enc:v1:/);
+    expect(String(row?.private_key)).toMatch(/^enc:v1:/);
+    expect(String(row?.passphrase)).toMatch(/^enc:v1:/);
+    expect(JSON.stringify(row)).not.toMatch(/pw-123|KEY-ABC|pp-456/);
     expect(String(row?.data)).not.toMatch(/pw-123|KEY-ABC|pp-456/);
     expect(JSON.parse(String(row?.data))).not.toHaveProperty("id");
 

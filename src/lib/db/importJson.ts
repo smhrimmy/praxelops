@@ -28,6 +28,8 @@ import {
  *   4. insert everything with INSERT OR IGNORE (rows already in the database win; the import never overwrites),
  *   5. set `meta.json_import_done`.
  * The original JSON files are left in place but are never read again. The ephemeral legacy `tickets/` dir is ignored.
+ * Server credentials are encrypted (vault.ts) as they are inserted; the leftover servers.json and its backup copy
+ * still hold them in plaintext until `scripts/purge-legacy-json.ts` is run.
  */
 
 export const JSON_IMPORT_META_KEY = "json_import_done";
@@ -156,7 +158,7 @@ function importAll(db: DatabaseSync, dataDir: string): Record<string, number> {
       "INSERT OR IGNORE INTO servers (id, data, password, private_key, passphrase) VALUES (?, ?, ?, ?, ?)"
     );
     for (const s of servers) {
-      const row = serverToRow(s as unknown as ServerHost);
+      const row = serverToRow(s as unknown as ServerHost, db);
       insert.run(row.id, row.data, row.password, row.privateKey, row.passphrase);
     }
     counts.servers = servers.length;
@@ -254,4 +256,44 @@ export function importLegacyJsonIfNeeded(db: DatabaseSync, dataDir: string): voi
       err
     );
   }
+}
+
+/** Absolute paths of the `backup/json-*` directories created by the import (sorted). */
+export function listLegacyBackupDirs(dataDir: string): string[] {
+  const backupRoot = path.join(dataDir, "backup");
+  let names: string[];
+  try {
+    names = fs.readdirSync(/*turbopackIgnore: true*/ backupRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("json-"))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  return names.sort().map((name) => path.join(backupRoot, name));
+}
+
+/** Legacy servers.json copies (live file and import backups) that still hold credentials in plaintext. */
+export function legacyPlaintextServerFiles(dataDir: string): string[] {
+  const candidates = [path.join(dataDir, "servers.json"), ...listLegacyBackupDirs(dataDir).map((d) => path.join(d, "servers.json"))];
+  return candidates.filter((file) => fs.existsSync(/*turbopackIgnore: true*/ file));
+}
+
+const LEGACY_WARNED_KEY = Symbol.for("praxelops.legacyPlaintextWarned");
+
+/**
+ * Once per process: if the import has run but plaintext legacy servers.json copies remain, say so and point to the
+ * purge script. Never deletes anything.
+ */
+export function warnLegacyPlaintextOnce(db: DatabaseSync, dataDir: string): void {
+  const g = globalThis as typeof globalThis & { [LEGACY_WARNED_KEY]?: boolean };
+  if (g[LEGACY_WARNED_KEY] === true) return;
+  if (!importMarkerPresent(db)) return;
+  const files = legacyPlaintextServerFiles(dataDir);
+  if (files.length === 0) return;
+  g[LEGACY_WARNED_KEY] = true;
+  console.warn(
+    `[PraxelOps] WARNING: ${files.length} legacy servers.json file(s) with PLAINTEXT SSH credentials remain after the ` +
+      `SQLite import (e.g. ${files[0]}). Run \`node --experimental-strip-types scripts/purge-legacy-json.ts --dry-run\` ` +
+      `to review, then without --dry-run to delete them.`
+  );
 }

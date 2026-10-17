@@ -1,10 +1,12 @@
 import { z } from "zod";
-import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type { AuditEvent, AuditEventType } from "@/types/audit";
 import type { ServerHost } from "@/types/server";
+import type { PublicServer } from "@/lib/servers/publicServer";
 // NOTE: only `import type` for "@/..." aliases (erased by type stripping) and relative .ts imports for values, so
 // plain node can load this module; erasable-only TypeScript syntax.
 import { StorageCorruptError } from "../storage/atomicFile.ts";
+import { decryptCredential, encryptCredential, getVaultDek, type CredentialColumn } from "../security/vault.ts";
 
 /**
  * Pure row <-> record mapping shared by the stores and the legacy JSON import.
@@ -43,16 +45,21 @@ function nullable(value: string | undefined): string | null {
 export interface ServerRowParams {
   id: string;
   data: string;
+  /** Envelope-encrypted (`enc:v1:...`) credentials, or null when absent/empty. */
   password: string | null;
   privateKey: string | null;
   passphrase: string | null;
 }
 
 function secretOrNull(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function serverToRow(server: ServerHost): ServerRowParams {
+/**
+ * Maps a server record to its row. Credentials are encrypted here (AAD binds each to its row and column), so the
+ * plaintext never reaches SQL. Empty/absent credentials are stored as NULL. `db` supplies the vault key.
+ */
+export function serverToRow(server: ServerHost, db: DatabaseSync): ServerRowParams {
   const record: Record<string, unknown> = { ...server };
   const id = record.id;
   if (typeof id !== "string" || id.length === 0) {
@@ -65,7 +72,16 @@ export function serverToRow(server: ServerHost): ServerRowParams {
   delete record.password;
   delete record.privateKey;
   delete record.passphrase;
-  return { id, data: JSON.stringify(record), password, privateKey, passphrase };
+  const dek = password !== null || privateKey !== null || passphrase !== null ? getVaultDek(db) : undefined;
+  const enc = (column: CredentialColumn, value: string | null): string | null =>
+    value === null || dek === undefined ? null : encryptCredential(dek, id, column, value);
+  return {
+    id,
+    data: JSON.stringify(record),
+    password: enc("password", password),
+    privateKey: enc("private_key", privateKey),
+    passphrase: enc("passphrase", passphrase),
+  };
 }
 
 const ServerRowSchema = z.object({
@@ -76,17 +92,41 @@ const ServerRowSchema = z.object({
   passphrase: z.string().nullable(),
 });
 
-/** Returns the stored record including its secret fields (as the JSON store did); callers strip them for API output. */
-export function rowToServer(row: SqlRow): ServerHost {
+export const SERVER_SELECT_COLUMNS = "id, data, password, private_key, passphrase";
+
+/**
+ * Returns the stored record including its DECRYPTED secret fields; callers strip them for API output.
+ * Throws VaultError (fail closed) if any credential is not valid ciphertext for this row/column or the vault key
+ * does not match.
+ */
+export function rowToServer(row: SqlRow, db: DatabaseSync): ServerHost {
   const parsed = ServerRowSchema.safeParse(row);
   if (!parsed.success) throw corruptRow("servers", String(row.id), parsed.error);
   const r = parsed.data;
   const record = parseJsonObject(r.data, "servers", r.id);
   record.id = r.id;
-  if (r.password !== null) record.password = r.password;
-  if (r.private_key !== null) record.privateKey = r.private_key;
-  if (r.passphrase !== null) record.passphrase = r.passphrase;
+  if (r.password !== null || r.private_key !== null || r.passphrase !== null) {
+    const dek = getVaultDek(db);
+    if (r.password !== null) record.password = decryptCredential(dek, r.id, "password", r.password);
+    if (r.private_key !== null) record.privateKey = decryptCredential(dek, r.id, "private_key", r.private_key);
+    if (r.passphrase !== null) record.passphrase = decryptCredential(dek, r.id, "passphrase", r.passphrase);
+  }
   return record as unknown as ServerHost;
+}
+
+/** Like rowToServer but never decrypts: secrets are dropped and presence flags are computed from the ciphertext. */
+export function rowToPublicServer(row: SqlRow): PublicServer {
+  const parsed = ServerRowSchema.safeParse(row);
+  if (!parsed.success) throw corruptRow("servers", String(row.id), parsed.error);
+  const r = parsed.data;
+  const record = parseJsonObject(r.data, "servers", r.id);
+  record.id = r.id;
+  return {
+    ...(record as unknown as Omit<PublicServer, "hasPassword" | "hasPrivateKey" | "hasPassphrase">),
+    hasPassword: r.password !== null,
+    hasPrivateKey: r.private_key !== null,
+    hasPassphrase: r.passphrase !== null,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
