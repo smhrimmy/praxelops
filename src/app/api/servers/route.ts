@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
 import { ServerHostSchema } from "@/types/server";
+import { toPublicServer, toPublicServers } from "@/lib/servers/publicServer";
 
 export async function GET(request: Request) {
   try {
@@ -16,7 +17,7 @@ export async function GET(request: Request) {
     }
 
     const servers = StorageService.getServers();
-    return NextResponse.json({ success: true, data: servers });
+    return NextResponse.json({ success: true, data: toPublicServers(servers) });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
       details: { host: newServer.host, port: newServer.port },
     });
 
-    return NextResponse.json({ success: true, data: newServer }, { status: 201 });
+    return NextResponse.json({ success: true, data: toPublicServer(newServer) }, { status: 201 });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },

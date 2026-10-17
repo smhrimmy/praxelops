@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
+import { toPublicServers } from "@/lib/servers/publicServer";
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
       status: "success",
       details: { isDemo: true, description: "Explicitly loaded demonstration sandbox" },
     });
-    return NextResponse.json({ success: true, data: demoServers });
+    return NextResponse.json({ success: true, data: toPublicServers(demoServers) });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },
