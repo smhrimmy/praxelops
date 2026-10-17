@@ -9,7 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "terminal:gateway": "node --experimental-strip-types src/server/terminalGateway.ts"
+    "terminal:gateway": "tsx src/server/terminalGateway.ts"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -34,6 +34,7 @@
     "@types/ws": "^8.5.14",
     "postcss": "^8.5.3",
     "tailwindcss": "^4.0.9",
+    "tsx": "4.23.15",
     "typescript": "^5.7.3",
     "vitest": "^5.0.5"
   }
