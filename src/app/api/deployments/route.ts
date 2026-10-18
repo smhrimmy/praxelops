@@ -4,6 +4,9 @@ import { DeploymentRunner } from "@/lib/deployments/runner";
 import { AuthService } from "@/lib/security/auth";
 import { TriggerDeploymentSchema, DeploymentWorkflow } from "@/types/deployment";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function GET(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
@@ -50,7 +53,8 @@ export async function POST(request: Request) {
     }
 
     const parsed = TriggerDeploymentSchema.parse(body);
-    const server = StorageService.getServerById(parsed.serverId);
+    // Only id/name are needed here; credentials are decrypted later by the runner.
+    const server = StorageService.getPublicServerById(parsed.serverId);
     if (!server) {
       return NextResponse.json(
         { success: false, error: "Target server not found" },

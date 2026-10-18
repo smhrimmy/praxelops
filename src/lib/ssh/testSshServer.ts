@@ -1,10 +1,30 @@
 import crypto from "node:crypto";
 import { Server, ServerChannel, Session } from "ssh2";
+import { PROBE_COMMAND } from "../metrics/probe";
+import { DEFAULT_TEST_PROBE_OUTPUT, nonLinuxProbeOutput } from "../metrics/fixtures";
+
+/** How the server answers the metrics collector's fixed probe command (the exact PROBE_COMMAND string). */
+export interface TestProbeBehavior {
+  /** Full stdout to return. Default: a realistic Ubuntu 22.04 fixture. */
+  output?: string;
+  /** Return a non-Linux probe result (uname -s = this name) instead of `output`. */
+  nonLinuxOs?: string;
+  /** Wait this long before answering (for timeout tests). */
+  delayMs?: number;
+  /** Exit status of the probe (default 0). */
+  exitCode?: number;
+}
 
 export interface TestSshServerInstance {
   server: Server;
   port: number;
   hostKeyPem: string;
+  /** Mutable: change how the probe command is answered while the server is running. */
+  probe: TestProbeBehavior;
+  /** Number of SSH client connections accepted so far (TCP-level; counts connections that never authenticate too). */
+  readonly connectionCount: number;
+  /** Every exec command received, in order. */
+  readonly execCommands: readonly string[];
   close: () => Promise<void>;
 }
 
@@ -14,6 +34,8 @@ export interface TestSshServerOptions {
   hostKeyPem?: string;
   /** Fixed listen port (default 0 = ephemeral). Lets tests restart a server on the same port. */
   port?: number;
+  /** Initial behaviour for the metrics probe command. */
+  probe?: TestProbeBehavior;
 }
 
 export function generateTestRsaKey(): string {
@@ -29,6 +51,9 @@ export function startTestSshServer(options: TestSshServerOptions = {}): Promise<
   const validUser = options.username || "testuser";
   const validPass = options.password || "secret123";
   const hostKey = options.hostKeyPem || generateTestRsaKey();
+  const probe: TestProbeBehavior = { ...(options.probe ?? {}) };
+  const execCommands: string[] = [];
+  let connectionCount = 0;
 
   return new Promise((resolve, reject) => {
     const server = new Server(
@@ -36,6 +61,10 @@ export function startTestSshServer(options: TestSshServerOptions = {}): Promise<
         hostKeys: [hostKey],
       },
       (client) => {
+        connectionCount += 1;
+        client.on("error", () => {
+          // Client-side aborts (e.g. a rejected host key) surface here; they are not test failures.
+        });
         client.on("authentication", (ctx) => {
           if (ctx.method === "password") {
             if (ctx.username === validUser && ctx.password === validPass) {
@@ -94,8 +123,22 @@ export function startTestSshServer(options: TestSshServerOptions = {}): Promise<
             session.on("exec", (acceptExec, _rejectExec, info) => {
               const stream: ServerChannel = acceptExec();
               const cmd = info.command.trim();
+              execCommands.push(cmd);
 
-              if (cmd.startsWith("uname")) {
+              if (info.command === PROBE_COMMAND) {
+                const respond = (): void => {
+                  const stdout = probe.nonLinuxOs !== undefined ? nonLinuxProbeOutput(probe.nonLinuxOs) : (probe.output ?? DEFAULT_TEST_PROBE_OUTPUT);
+                  stream.write(stdout);
+                  stream.exit(probe.exitCode ?? 0);
+                  stream.end();
+                };
+                if (probe.delayMs !== undefined && probe.delayMs > 0) {
+                  const timer = setTimeout(respond, probe.delayMs);
+                  stream.on("close", () => clearTimeout(timer));
+                } else {
+                  respond();
+                }
+              } else if (cmd.startsWith("uname")) {
                 stream.write("Linux praxelops-test-node 6.8.0 #1 SMP x86_64 GNU/Linux\n");
                 stream.exit(0);
                 stream.end();
@@ -197,6 +240,13 @@ export function startTestSshServer(options: TestSshServerOptions = {}): Promise<
         server,
         port,
         hostKeyPem: hostKey,
+        probe,
+        get connectionCount() {
+          return connectionCount;
+        },
+        get execCommands() {
+          return execCommands;
+        },
         close: () =>
           new Promise<void>((res) => {
             server.close(() => res());

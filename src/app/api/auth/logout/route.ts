@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
     // Requires a valid session plus Origin + CSRF (cookie auth), like every other mutation.

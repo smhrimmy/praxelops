@@ -15,6 +15,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import http, { type IncomingHttpHeaders } from "node:http";
 import net from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from "vitest";
@@ -86,10 +87,6 @@ function sshFingerprint(hostKeyPem: string): string {
   if (!key || key instanceof Error) throw new Error("Unable to parse SSH host key");
   // Same derivation as KnownHostsService.computeFingerprint over the public key blob.
   return "SHA256:" + crypto.createHash("sha256").update(key.getPublicSSH()).digest("base64");
-}
-
-function readJsonFile(file: string): unknown {
-  return JSON.parse(fs.readFileSync(file, "utf-8"));
 }
 
 function childEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
@@ -522,32 +519,72 @@ interface AuditRecord {
   details?: Record<string, unknown>;
 }
 
+const DB_FILENAME = "praxelops.db";
+
+/** Opens the shared SQLite database (WAL, same file the web app and the gateway use) for one inspection. */
+function withDb<T>(fn: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(path.join(dataDir, DB_FILENAME));
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
 function readAudit(): AuditRecord[] {
-  const raw = readJsonFile(path.join(dataDir, "audit.json"));
+  const rows = withDb((db) => db.prepare("SELECT event_type, status, details FROM audit_events ORDER BY seq DESC").all());
   return z
     .array(
       z.object({
-        eventType: z.string(),
+        event_type: z.string(),
         status: z.string(),
-        details: z.record(z.string(), z.unknown()).optional(),
+        details: z.string().nullable(),
       })
     )
-    .parse(raw);
+    .parse(rows)
+    .map((row) => ({
+      eventType: row.event_type,
+      status: row.status,
+      details: row.details === null ? undefined : z.record(z.string(), z.unknown()).parse(JSON.parse(row.details)),
+    }));
+}
+
+/** Raw bytes of the database file and its write-ahead log (committed data may still live only in the WAL). */
+function rawDatabaseBytes(): string {
+  const base = path.join(dataDir, DB_FILENAME);
+  return [base, `${base}-wal`]
+    .filter((file) => fs.existsSync(file))
+    .map((file) => fs.readFileSync(file).toString("latin1"))
+    .join(" ");
 }
 
 function assertAuditHasNoSecrets(): void {
-  const rawAudit = fs.readFileSync(path.join(dataDir, "audit.json"), "utf-8");
+  const rawAudit = JSON.stringify(
+    withDb((db) => db.prepare("SELECT * FROM audit_events").all())
+  );
   expect(rawAudit).not.toContain(sshPassword);
   expect(rawAudit).not.toContain(operatorPassword);
   for (const ticket of issuedTickets) {
     expect(rawAudit).not.toContain(ticket);
   }
+
+  // Whole-file scan (database + WAL). The operator's plaintext password is never stored, tickets are stored only
+  // as digests, and (since Milestone 7.2) the SSH password is envelope-encrypted in servers.password, so none of
+  // them may appear anywhere in the raw bytes.
+  const raw = rawDatabaseBytes();
+  expect(raw.length).toBeGreaterThan(0);
+  expect(raw).not.toContain(operatorPassword);
+  expect(raw).not.toContain(sshPassword);
+  for (const ticket of issuedTickets) {
+    expect(raw).not.toContain(ticket);
+  }
 }
 
 function readPins(): Record<string, { fingerprint: string }> {
-  return z
-    .record(z.string(), z.object({ fingerprint: z.string() }).passthrough())
-    .parse(readJsonFile(path.join(dataDir, "known_hosts.json")));
+  const rows = withDb((db) => db.prepare("SELECT host_port, fingerprint FROM known_hosts").all());
+  const parsed = z.array(z.object({ host_port: z.string(), fingerprint: z.string() })).parse(rows);
+  return Object.fromEntries(parsed.map((row) => [row.host_port, { fingerprint: row.fingerprint }]));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -806,7 +843,7 @@ describe("production topology: next start + terminal gateway as separate OS proc
     await loginAndStoreSession();
     expect(cookie).not.toBe(oldCookie);
 
-    // Persistent state (servers.json) survived the restart.
+    // Persistent state (the servers table) survived the restart.
     const listed = await httpRequest({ port: webPort, path: "/api/servers", headers: { Cookie: `${SESSION_COOKIE}=${cookie}` } });
     expect(listed.status).toBe(200);
     expect(ServersListResponse.parse(parseJson(listed.text)).data.map((s) => s.id)).toContain(serverId);
@@ -850,6 +887,112 @@ describe("production topology: next start + terminal gateway as separate OS proc
 
     // The pin is untouched.
     expect(readPins()[`127.0.0.1:${sshPort}`].fingerprint).toBe(pinnedFingerprint);
+    assertAuditHasNoSecrets();
+  });
+
+  it("h. agentless metrics: refresh stores a sample from the pinned host, and the collector process keeps collecting until killed", async () => {
+    onTestFailed(dumpLogs);
+
+    // Test g left an impostor key on the SSH port; restore the ORIGINAL key so the pin set by the shell session matches.
+    const impostor = ssh;
+    if (!impostor) throw new Error("ssh server not running");
+    await Promise.race([impostor.close(), sleep(5_000)]);
+    await expectPortFree(sshPort);
+    ssh = await startTestSshServer({ username: SSH_USER, password: sshPassword, hostKeyPem: originalHostKeyPem, port: sshPort });
+    expect(readPins()[`127.0.0.1:${sshPort}`].fingerprint).toBe(pinnedFingerprint);
+    const pinsBefore = readPins();
+
+    const listServers = async (): Promise<Array<Record<string, unknown>>> => {
+      const res = await httpRequest({ port: webPort, path: "/api/servers", headers: { Cookie: `${SESSION_COOKIE}=${cookie}` } });
+      expect(res.status).toBe(200);
+      expect(res.text).not.toContain(sshPassword);
+      return z.object({ data: z.array(z.record(z.string(), z.unknown())) }).parse(parseJson(res.text)).data;
+    };
+    const mine = async (): Promise<Record<string, unknown>> => {
+      const found = (await listServers()).find((s) => s.id === serverId);
+      if (!found) throw new Error("server missing from listing");
+      return found;
+    };
+    const sampleCount = (): number =>
+      withDb((db) => Number(db.prepare("SELECT COUNT(*) AS n FROM metrics_samples WHERE server_id = ? AND ok = 1").get(serverId)?.n ?? 0));
+
+    // Nothing sampled yet: no metrics are invented.
+    expect((await mine()).metrics).toBeUndefined();
+
+    // 1. Operator-triggered refresh through the real web process.
+    const refresh = await httpRequest({
+      port: webPort,
+      method: "POST",
+      path: `/api/servers/${serverId}/metrics/refresh`,
+      headers: authHeaders(),
+    });
+    expect(refresh.status).toBe(200);
+    expect(refresh.text).not.toContain(sshPassword);
+    const refreshed = z.object({ data: z.object({ ok: z.literal(true), stored: z.literal(true) }).passthrough() }).parse(parseJson(refresh.text));
+    expect(refreshed.data.ok).toBe(true);
+
+    const listed = z
+      .object({
+        metrics: z.object({ cpuPercent: z.number(), memoryPercent: z.number(), diskPercent: z.number() }),
+        health: z.object({ state: z.literal("reachable"), sampleAgeSeconds: z.number() }),
+      })
+      .passthrough()
+      .parse(await mine());
+    expect(listed.metrics.cpuPercent).toBe(25);
+    expect(listed.metrics.memoryPercent).toBe(34.6);
+    expect(listed.metrics.diskPercent).toBe(33.8);
+
+    const latest = await httpRequest({ port: webPort, path: `/api/servers/${serverId}/metrics/latest`, headers: { Cookie: `${SESSION_COOKIE}=${cookie}` } });
+    expect(latest.status).toBe(200);
+    expect(latest.text).toContain("nginx.service");
+    expect(latest.text).toContain("postgres");
+
+    // 2. The collector, as its own OS process, with a 10 second interval.
+    const before = sampleCount();
+    expect(before).toBe(1);
+    const collector = new ManagedProcess("collector(tsx)", [TSX_CLI, path.join("src", "server", "metricsCollector.ts")], childEnv({ ...sharedEnv(), METRICS_INTERVAL_SECONDS: "10" }));
+    collector.start();
+    const collectorPid = (): number | undefined => collector.pid;
+    try {
+      await waitUntil(() => sampleCount() > before || collector.hasExited, 25_000, "a new sample from the collector process");
+      if (collector.hasExited) throw new Error(`collector exited early (${collector.description})\n${collector.logs()}`);
+      expect(sampleCount()).toBeGreaterThan(before);
+      await waitUntil(() => collector.logs().includes("cycle="), 5_000, "a collector cycle log line");
+      expect(collector.logs()).toMatch(/\[metrics-collector\] starting interval=10s/);
+      expect(collector.logs()).not.toContain(sshPassword);
+
+      const fresh = z.object({ health: z.object({ state: z.literal("reachable"), sampleAgeSeconds: z.number() }).passthrough() }).passthrough().parse(await mine());
+      expect(fresh.health.sampleAgeSeconds).toBeLessThan(30);
+
+      // The collector only ever ran the fixed probe, and enrolled / changed no host key.
+      expect(readPins()).toEqual(pinsBefore);
+      const probes = ssh?.execCommands.filter((c) => c.startsWith("env LC_ALL=C sh -c")) ?? [];
+      expect(probes.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(probes).size).toBe(1);
+    } finally {
+      // 3. Kill it and confirm it is really gone.
+      const pid = collectorPid();
+      await collector.stop();
+      if (pid !== undefined) {
+        await waitUntil(
+          () => {
+            try {
+              process.kill(pid, 0);
+              return false;
+            } catch {
+              return true;
+            }
+          },
+          10_000,
+          "collector process to disappear"
+        );
+      }
+    }
+
+    const afterKill = sampleCount();
+    await sleep(12_000); // longer than one interval (10s + jitter)
+    expect(sampleCount()).toBe(afterKill);
+
     assertAuditHasNoSecrets();
   });
 });

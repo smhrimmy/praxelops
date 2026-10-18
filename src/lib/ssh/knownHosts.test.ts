@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import fs from "fs";
-import path from "path";
 import { KnownHostsService } from "./knownHosts";
 import { StorageService } from "@/lib/storage";
-import { getDataDir } from "@/lib/storage/dataDir";
+import { getDb } from "@/lib/db/database";
 import { StorageCorruptError } from "@/lib/storage/atomicFile";
 import crypto from "crypto";
 
@@ -68,15 +66,52 @@ describe("KnownHostsService", () => {
     expect(mismatchEvent).toBeDefined();
     expect(mismatchEvent?.status).toBe("denied");
   });
-  it("does not rewrite the known_hosts file on a successful verification", () => {
+  it("does not write anything (pin row or audit log) on a successful verification", () => {
     KnownHostsService.verifyHostKey(host, port, originalKeyBuffer);
-    const file = path.join(getDataDir(), "known_hosts.json");
-    const before = fs.readFileSync(file, "utf-8");
-    const mtimeBefore = fs.statSync(file).mtimeMs;
+    const selectPin = () =>
+      getDb().prepare("SELECT * FROM known_hosts WHERE host_port = ?").get(`${host}:${port}`);
+    const before = JSON.stringify(selectPin());
+    const auditCountBefore = StorageService.getAuditEvents().length;
+    const totalChangesBefore = Number(getDb().prepare("SELECT total_changes() AS n").get()?.n);
+
     const res = KnownHostsService.verifyHostKey(host, port, originalKeyBuffer);
     expect(res.verified).toBe(true);
-    expect(fs.readFileSync(file, "utf-8")).toBe(before);
-    expect(fs.statSync(file).mtimeMs).toBe(mtimeBefore);
+    expect(JSON.stringify(selectPin())).toBe(before);
+    expect(StorageService.getAuditEvents().length).toBe(auditCountBefore);
+    expect(Number(getDb().prepare("SELECT total_changes() AS n").get()?.n)).toBe(totalChangesBefore);
+  });
+
+  it("commits the enrollment audit event and the pin together", () => {
+    const isEnrollment = (e: { details?: Record<string, unknown>; targetServerId?: string }) =>
+      e.details?.alertType === "tofu_host_key_enrolled" && e.targetServerId === `${host}:${port}`;
+    const before = StorageService.getAuditEvents().filter(isEnrollment).length;
+    KnownHostsService.verifyHostKey(host, port, originalKeyBuffer);
+    expect(StorageService.getAuditEvents().filter(isEnrollment).length).toBe(before + 1);
+    expect(KnownHostsService.getKnownHosts()[`${host}:${port}`]).toBeDefined();
+  });
+
+  it("rolls the enrollment audit event back when the pin cannot be written (atomic)", () => {
+    const isEnrollment = (e: { details?: Record<string, unknown>; targetServerId?: string }) =>
+      e.details?.alertType === "tofu_host_key_enrolled" && e.targetServerId === `${host}:${port}`;
+    const before = StorageService.getAuditEvents().filter(isEnrollment).length;
+    const db = getDb();
+    db.exec("CREATE TRIGGER fail_pin_insert BEFORE INSERT ON known_hosts BEGIN SELECT RAISE(ABORT, 'pin write blocked'); END");
+    try {
+      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(/pin write blocked/);
+    } finally {
+      db.exec("DROP TRIGGER fail_pin_insert");
+    }
+    expect(StorageService.getAuditEvents().filter(isEnrollment).length).toBe(before);
+    expect(KnownHostsService.getKnownHosts()[`${host}:${port}`]).toBeUndefined();
+  });
+
+  it("removes a single pin and clears all", () => {
+    KnownHostsService.verifyHostKey(host, port, originalKeyBuffer);
+    KnownHostsService.verifyHostKey("other.example", 2222, originalKeyBuffer);
+    KnownHostsService.removeHostKey(host, port);
+    expect(Object.keys(KnownHostsService.getKnownHosts())).toEqual(["other.example:2222"]);
+    KnownHostsService.clearKnownHosts();
+    expect(KnownHostsService.getKnownHosts()).toEqual({});
   });
 
   it("treats a second enrollment of the same host with a different key as a mismatch", () => {
@@ -96,33 +131,38 @@ describe("KnownHostsService", () => {
       vi.restoreAllMocks();
     });
 
-    it("rejects verification (throws) and does NOT enroll when known_hosts is corrupt", () => {
-      const file = path.join(getDataDir(), "known_hosts.json");
-      fs.writeFileSync(file, '{"192.168.1.5:22": {"host": "192.', "utf-8"); // truncated JSON
-      const corrupt = fs.readFileSync(file, "utf-8");
+    const key = `${host}:${port}`;
+    const insertRaw = (hostPort: string, h: unknown, p: unknown, fp: unknown) =>
+      getDb()
+        .prepare(
+          "INSERT INTO known_hosts (host_port, host, port, fingerprint, first_seen_at, last_verified_at) VALUES (?, ?, ?, ?, 'a', 'b')"
+        )
+        .run(hostPort, h as string, p as number, fp as string);
 
-      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(
-        StorageCorruptError
-      );
-      // File untouched: no enrollment, no overwrite of other pins
-      expect(fs.readFileSync(file, "utf-8")).toBe(corrupt);
+    it("rejects verification (throws) and does NOT replace the pin when its row has an empty fingerprint", () => {
+      insertRaw(key, host, port, "");
+      const auditsBefore = StorageService.getAuditEvents().length;
+
+      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(StorageCorruptError);
+      // Row untouched: no enrollment over it, no audit event written.
+      const row = getDb().prepare("SELECT fingerprint FROM known_hosts WHERE host_port = ?").get(key);
+      expect(row?.fingerprint).toBe("");
+      expect(StorageService.getAuditEvents().length).toBe(auditsBefore);
     });
 
-    it("rejects verification when known_hosts has a wrong-shaped but parseable payload", () => {
-      const file = path.join(getDataDir(), "known_hosts.json");
-      fs.writeFileSync(file, "[]", "utf-8");
-      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(
-        StorageCorruptError
-      );
-      fs.writeFileSync(file, '{"h:22": {"fingerprint": 5}}', "utf-8");
-      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(
-        StorageCorruptError
-      );
+    it("rejects verification when a pin row has wrong-typed or inconsistent columns", () => {
+      insertRaw(key, host, "not-a-port", "SHA256:abc");
+      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(StorageCorruptError);
+      expect(() => KnownHostsService.getKnownHosts()).toThrow(StorageCorruptError);
+
+      KnownHostsService.clearKnownHosts();
+      // host_port that does not match its host/port columns
+      insertRaw(key, "evil.example", port, "SHA256:abc");
+      expect(() => KnownHostsService.verifyHostKey(host, port, originalKeyBuffer)).toThrow(StorageCorruptError);
     });
 
     it("recovers via an explicit clear after corruption", () => {
-      const file = path.join(getDataDir(), "known_hosts.json");
-      fs.writeFileSync(file, "", "utf-8");
+      insertRaw(key, host, port, "");
       expect(() => KnownHostsService.getKnownHosts()).toThrow(StorageCorruptError);
       KnownHostsService.clearKnownHosts();
       expect(KnownHostsService.getKnownHosts()).toEqual({});

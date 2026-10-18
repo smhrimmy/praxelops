@@ -3,11 +3,20 @@ import { ServerHost } from "@/types/server";
 import { ServerDiagnosticReport, AIOperationProposal } from "@/types/ai";
 import { ApprovalSecurityService } from "./approval";
 
+export interface DiagnosticsContext {
+  /**
+   * Why no live telemetry is available (e.g. the host key is not pinned yet). Only used on the "no telemetry" path,
+   * where it is appended verbatim to the explanation so the operator learns what to fix.
+   */
+  healthReason?: string;
+}
+
 export class AIDiagnosticsEngine {
   /**
-   * Generates grounded diagnostic reports and signed operational proposals from actual server telemetry
+   * Generates grounded diagnostic reports and signed operational proposals from actual server telemetry.
+   * `server.metrics` must hold REAL collected metrics (or be absent): the engine never fabricates values.
    */
-  static analyzeServer(server: ServerHost): ServerDiagnosticReport {
+  static analyzeServer(server: ServerHost, context: DiagnosticsContext = {}): ServerDiagnosticReport {
     const metrics = server.metrics;
     const anomalies: ServerDiagnosticReport["anomalies"] = [];
     const proposals: AIOperationProposal[] = [];
@@ -20,12 +29,18 @@ export class AIDiagnosticsEngine {
         serverName: server.name,
         timestamp: new Date().toISOString(),
         healthScore: 50,
-        summary: `No live telemetry available for ${server.name}. Establish an SSH connection to gather genuine resource metrics.`,
+        summary:
+          `No live telemetry available for ${server.name}. ` +
+          (context.healthReason
+            ? `Reason: ${context.healthReason}`
+            : "Establish an SSH connection to gather genuine resource metrics."),
         anomalies: [
           {
             category: "service",
             severity: "warning",
-            detail: "Telemetry collector has not yet captured metrics from this host.",
+            detail: context.healthReason
+              ? `Telemetry collector has not yet captured metrics from this host: ${context.healthReason}`
+              : "Telemetry collector has not yet captured metrics from this host.",
           },
         ],
         proposals: [],

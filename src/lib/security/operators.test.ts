@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
+import { getDb } from "../db/database";
+import { StorageCorruptError } from "../storage/atomicFile";
 import {
   createOperator,
   findOperatorByUsername,
@@ -65,7 +67,12 @@ describe("operator store", () => {
     expect(created).toBe(true);
     expect(operator.username).toBe("store-alice");
 
-    const raw = fs.readFileSync(getOperatorsFilePath(), "utf-8");
+    // Scan the raw database file and its write-ahead log: the password must not be on disk anywhere.
+    const dbFile = getOperatorsFilePath();
+    const raw = [dbFile, `${dbFile}-wal`]
+      .filter((f) => fs.existsSync(f))
+      .map((f) => fs.readFileSync(f).toString("latin1"))
+      .join(" ");
     expect(raw).not.toContain(GOOD_PASSWORD);
     expect(raw).toContain("scrypt$");
     expect(findOperatorByUsername("store-alice")?.passwordHash.startsWith("scrypt$")).toBe(true);
@@ -112,5 +119,25 @@ describe("operator store", () => {
     // Both paths run exactly one scrypt (tens of ms); the unknown-user path must not be near-instant.
     expect(unknown).toBeGreaterThan(wrong * 0.3);
     expect(unknown).toBeGreaterThan(10);
+  });
+
+  it("lets exactly one of two concurrent creations of the same username win", async () => {
+    const results = await Promise.allSettled([
+      createOperator("store-erin", GOOD_PASSWORD),
+      createOperator("store-erin", "a different long password"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toBeInstanceOf(OperatorExistsError);
+    expect(listOperators().filter((o) => o.username === "store-erin")).toHaveLength(1);
+  });
+
+  it("fails closed (throws) when an operator row is malformed instead of treating it as absent", async () => {
+    await createOperator("store-frank", GOOD_PASSWORD);
+    getDb().prepare("UPDATE operators SET password_hash = '' WHERE username = ?").run("store-frank");
+    expect(() => findOperatorByUsername("store-frank")).toThrow(StorageCorruptError);
+    await expect(verifyOperatorCredentials("store-frank", GOOD_PASSWORD)).rejects.toThrow(StorageCorruptError);
+    getDb().prepare("DELETE FROM operators WHERE username = ?").run("store-frank");
   });
 });

@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { z } from "zod";
 // NOTE: relative imports WITH .ts extensions and erasable-only TypeScript syntax, so that plain
 // `node --experimental-strip-types scripts/create-operator.ts` can load this module.
-import { getDataDir } from "../storage/dataDir.ts";
-import { atomicWriteFileSync, readJsonStrict, StorageCorruptError, withFileLockSync } from "../storage/atomicFile.ts";
+import { getDb, getDbPath, prepare, withTransaction } from "../db/database.ts";
+import { corruptRow, type SqlRow } from "../db/records.ts";
 
 /** scrypt cost parameters for NEW hashes. Existing hashes carry their own parameters. */
 const SCRYPT_N = 1 << 15;
@@ -38,8 +37,6 @@ const OperatorRecordSchema = z.object({
   passwordHash: z.string().min(1),
   createdAt: z.string().min(1),
 });
-
-const OperatorsFileSchema = z.array(OperatorRecordSchema);
 
 export type OperatorRecord = z.infer<typeof OperatorRecordSchema>;
 
@@ -127,26 +124,38 @@ async function verifyAgainstDummy(password: string): Promise<void> {
   await scryptAsync(password, parsed.salt, parsed.key.length, parsed.n, parsed.r, parsed.p);
 }
 
+/** Path of the SQLite database that stores operators (kept under its historical name for callers/CLI). */
 export function getOperatorsFilePath(): string {
-  return path.join(getDataDir(), "operators.json");
+  return getDbPath();
 }
 
-function readOperators(file: string): OperatorRecord[] {
-  const raw = readJsonStrict<unknown>(file);
-  if (raw === undefined) return [];
-  const parsed = OperatorsFileSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new StorageCorruptError(file, parsed.error);
-  }
-  return parsed.data;
+const OperatorRowSchema = z.object({
+  id: z.string().min(1),
+  username: UsernameSchema,
+  password_hash: z.string().min(1),
+  created_at: z.string().min(1),
+});
+
+const OPERATOR_COLUMNS = "id, username, password_hash, created_at";
+
+function rowToOperator(row: SqlRow): OperatorRecord {
+  const parsed = OperatorRowSchema.safeParse(row);
+  if (!parsed.success) throw corruptRow("operators", String(row.id), parsed.error);
+  const r = parsed.data;
+  return { id: r.id, username: r.username, passwordHash: r.password_hash, createdAt: r.created_at };
 }
 
 export function findOperatorByUsername(username: string): OperatorRecord | undefined {
-  return readOperators(getOperatorsFilePath()).find((o) => o.username === username);
+  const row = prepare(getDb(), `SELECT ${OPERATOR_COLUMNS} FROM operators WHERE username = ?`).get(username);
+  return row === undefined ? undefined : rowToOperator(row as SqlRow);
 }
 
 export function listOperators(): OperatorIdentity[] {
-  return readOperators(getOperatorsFilePath()).map((o) => ({ id: o.id, username: o.username }));
+  const rows = prepare(getDb(), `SELECT ${OPERATOR_COLUMNS} FROM operators ORDER BY rowid`).all();
+  return rows.map((row) => {
+    const o = rowToOperator(row as SqlRow);
+    return { id: o.id, username: o.username };
+  });
 }
 
 export interface CreateOperatorOptions {
@@ -159,7 +168,7 @@ export interface CreateOperatorResult {
   created: boolean;
 }
 
-/** Creates (or, with reset, re-passwords) an operator. Input is validated with Zod; storage is locked + atomic. */
+/** Creates (or, with reset, re-passwords) an operator. Input is validated with Zod; the write is one BEGIN IMMEDIATE transaction. */
 export async function createOperator(
   usernameInput: string,
   passwordInput: string,
@@ -167,20 +176,19 @@ export async function createOperator(
 ): Promise<CreateOperatorResult> {
   const username = UsernameSchema.parse(usernameInput);
   const password = PasswordSchema.parse(passwordInput);
-  // Hash outside the (synchronous) file lock; scrypt is slow.
+  // Hash outside the (synchronous) database transaction; scrypt is slow.
   const passwordHash = await hashPassword(password);
-  const file = getOperatorsFilePath();
 
-  return withFileLockSync(file, () => {
-    const operators = readOperators(file);
-    const existing = operators.find((o) => o.username === username);
+  return withTransaction((db) => {
+    const row = prepare(db, `SELECT ${OPERATOR_COLUMNS} FROM operators WHERE username = ?`).get(username);
+    const existing = row === undefined ? undefined : rowToOperator(row as SqlRow);
     if (existing && !options.reset) {
       throw new OperatorExistsError(username);
     }
     let record: OperatorRecord;
     if (existing) {
       record = { ...existing, passwordHash };
-      operators[operators.indexOf(existing)] = record;
+      prepare(db, "UPDATE operators SET password_hash = ? WHERE id = ?").run(passwordHash, existing.id);
     } else {
       record = {
         id: `op_${crypto.randomBytes(6).toString("hex")}`,
@@ -188,9 +196,13 @@ export async function createOperator(
         passwordHash,
         createdAt: new Date().toISOString(),
       };
-      operators.push(record);
+      prepare(db, "INSERT INTO operators (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)").run(
+        record.id,
+        record.username,
+        record.passwordHash,
+        record.createdAt
+      );
     }
-    atomicWriteFileSync(file, JSON.stringify(operators, null, 2));
     return { operator: { id: record.id, username: record.username }, created: !existing };
   });
 }

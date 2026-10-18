@@ -3,6 +3,9 @@ import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
 import { TicketService } from "@/lib/security/ticket";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);
@@ -28,7 +31,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const server = StorageService.getServerById(serverId);
+    // Credentials are not needed to issue a ticket (the gateway decrypts them at connect time).
+    const server = StorageService.getPublicServerById(serverId);
     if (!server) {
       return NextResponse.json(
         { success: false, error: `Server '${serverId}' not found in fleet inventory` },

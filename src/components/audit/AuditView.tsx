@@ -66,7 +66,7 @@ export const AuditView: React.FC = () => {
   const getEventBadge = (type: AuditEventType) => {
     if (type.startsWith("ssh_")) {
       return (
-        <span className="flex items-center space-x-1 text-emerald-500 font-mono text-[11px]">
+        <span className="flex items-center space-x-1 text-success font-mono text-[11px]">
           <Terminal className="w-3 h-3" />
           <span>{type}</span>
         </span>
@@ -74,7 +74,7 @@ export const AuditView: React.FC = () => {
     }
     if (type.startsWith("ai_")) {
       return (
-        <span className="flex items-center space-x-1 text-purple-500 font-mono text-[11px]">
+        <span className="flex items-center space-x-1 text-violet font-mono text-[11px]">
           <Bot className="w-3 h-3" />
           <span>{type}</span>
         </span>
@@ -82,14 +82,14 @@ export const AuditView: React.FC = () => {
     }
     if (type.startsWith("deployment_")) {
       return (
-        <span className="flex items-center space-x-1 text-orange-500 font-mono text-[11px]">
+        <span className="flex items-center space-x-1 text-orange font-mono text-[11px]">
           <Rocket className="w-3 h-3" />
           <span>{type}</span>
         </span>
       );
     }
     return (
-      <span className="flex items-center space-x-1 text-blue-500 font-mono text-[11px]">
+      <span className="flex items-center space-x-1 text-info font-mono text-[11px]">
         <Key className="w-3 h-3" />
         <span>{type}</span>
       </span>
@@ -97,32 +97,34 @@ export const AuditView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden p-6 space-y-4">
+    <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden p-3 sm:p-6 space-y-4">
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 flex items-center space-x-2">
-            <ShieldCheck className="w-5 h-5 text-teal-500" />
-            <span>Immutable Security Audit Log</span>
+          <h1 className="text-xl font-bold tracking-tight text-fg flex items-center space-x-2">
+            <ShieldCheck className="w-5 h-5 text-teal" />
+            <span>Security Audit Log</span>
           </h1>
-          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-            Tamper-evident operational audit trail covering all SSH sessions, AI commands, approvals and deployments.
+          <p className="text-xs text-fg-muted mt-0.5">
+            Operational audit trail of sign-ins, SSH sessions, SFTP access, AI proposals and approvals, deployments and host changes.
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <input
             type="text"
+            aria-label="Search audit events"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search actor, server, command..."
-            className="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-blue-500 w-56"
+            className="px-3 py-1.5 rounded-lg bg-sunken border border-line-strong text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0 flex-1 sm:flex-none sm:w-56"
           />
 
           <button
             onClick={exportAuditJson}
             title="Export Audit Trail"
-            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-neutral-700 dark:text-neutral-300 transition"
+            aria-label="Export audit trail as JSON"
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-sunken hover:bg-hover-strong text-xs text-fg-2 transition-colors whitespace-nowrap shrink-0"
           >
             <Download className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Export JSON</span>
@@ -131,8 +133,9 @@ export const AuditView: React.FC = () => {
           <button
             onClick={fetchAuditEvents}
             disabled={loading}
-            className="p-2 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-neutral-700 dark:text-neutral-300 transition"
+            className="p-2 rounded-lg bg-sunken hover:bg-hover-strong text-fg-2 transition"
             title="Refresh Logs"
+            aria-label="Refresh audit log"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
@@ -140,43 +143,47 @@ export const AuditView: React.FC = () => {
       </div>
 
       {/* Filter Chips */}
-      <div className="flex items-center space-x-1.5 overflow-x-auto shrink-0 select-none">
+      <div className="flex items-center gap-1.5 overflow-x-auto shrink-0 select-none pb-1">
         <button
           onClick={() => setFilterType("all")}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+          aria-pressed={filterType === "all"}
+          className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
             filterType === "all"
               ? "bg-blue-600 text-white"
-              : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400"
+              : "bg-sunken text-fg-2"
           }`}
         >
           All Events ({events.length})
         </button>
         <button
           onClick={() => setFilterType("command_exec")}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+          aria-pressed={filterType === "command_exec"}
+          className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
             filterType === "command_exec"
               ? "bg-blue-600 text-white"
-              : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400"
+              : "bg-sunken text-fg-2"
           }`}
         >
           Commands
         </button>
         <button
           onClick={() => setFilterType("ai_")}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+          aria-pressed={filterType === "ai_"}
+          className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
             filterType === "ai_"
               ? "bg-blue-600 text-white"
-              : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400"
+              : "bg-sunken text-fg-2"
           }`}
         >
           AI Approvals & Actions
         </button>
         <button
           onClick={() => setFilterType("deployment_")}
-          className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+          aria-pressed={filterType === "deployment_"}
+          className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
             filterType === "deployment_"
               ? "bg-blue-600 text-white"
-              : "bg-black/5 dark:bg-white/5 text-neutral-600 dark:text-neutral-400"
+              : "bg-sunken text-fg-2"
           }`}
         >
           Deployments
@@ -184,9 +191,9 @@ export const AuditView: React.FC = () => {
       </div>
 
       {/* Audit Log Table */}
-      <div className="flex-1 overflow-y-auto rounded-xl border border-black/5 dark:border-white/10 bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md">
-        <table className="w-full text-left text-xs">
-          <thead className="bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/10 text-neutral-500 dark:text-neutral-400 font-medium select-none sticky top-0">
+      <div className="flex-1 min-h-0 overflow-auto rounded-xl border border-line bg-surface-2 backdrop-blur-md">
+        <table className="w-full min-w-[46rem] text-left text-xs">
+          <thead className="bg-elevated border-b border-line text-fg-muted font-medium select-none sticky top-0 z-10">
             <tr>
               <th className="py-2.5 px-4">Timestamp</th>
               <th className="py-2.5 px-4">Actor</th>
@@ -196,23 +203,30 @@ export const AuditView: React.FC = () => {
               <th className="py-2.5 px-4 text-right">Status</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-black/5 dark:divide-white/5 font-mono">
+          <tbody className="divide-y divide-line font-mono">
+            {!loading && filteredEvents.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-8 px-4 text-center text-fg-muted font-sans">
+                  No audit events match the current filter.
+                </td>
+              </tr>
+            )}
             {filteredEvents.map((evt) => (
               <tr
                 key={evt.id}
-                className="hover:bg-black/5 dark:hover:bg-white/5 transition"
+                className="hover:bg-hover transition"
               >
-                <td className="py-2 px-4 text-neutral-500 whitespace-nowrap">
+                <td className="py-2 px-4 text-fg-muted whitespace-nowrap">
                   {new Date(evt.timestamp).toLocaleString()}
                 </td>
-                <td className="py-2 px-4 text-neutral-800 dark:text-neutral-200">
+                <td className="py-2 px-4 text-fg">
                   {evt.actor}
                 </td>
                 <td className="py-2 px-4">{getEventBadge(evt.eventType)}</td>
-                <td className="py-2 px-4 text-neutral-700 dark:text-neutral-300">
+                <td className="py-2 px-4 text-fg-2">
                   {evt.targetServerName || "—"}
                 </td>
-                <td className="py-2 px-4 text-neutral-600 dark:text-neutral-400 max-w-xs truncate">
+                <td className="py-2 px-4 text-fg-2 max-w-xs truncate">
                   {evt.command ||
                     JSON.stringify(evt.details) ||
                     "—"}
@@ -221,8 +235,8 @@ export const AuditView: React.FC = () => {
                   <span
                     className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] uppercase font-semibold ${
                       evt.status === "success"
-                        ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                        : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        ? "bg-emerald-500/10 text-success"
+                        : "bg-rose-500/10 text-danger"
                     }`}
                   >
                     {evt.status === "success" ? (

@@ -47,7 +47,8 @@ describe("auth routes", () => {
     vi.unstubAllEnvs();
   });
 
-  describe("POST /api/auth/login", () => {
+  // Login tests run several full-cost scrypt hashes in sequence; give the whole group headroom under parallel load.
+  describe("POST /api/auth/login", { timeout: 30_000 }, () => {
     it("sets a hardened session cookie and returns operatorId + csrfToken on success", async () => {
       const auditSpy = vi.spyOn(StorageService, "logAuditEvent");
       const res = await loginPost(loginRequest({ username: USERNAME, password: PASSWORD }, { origin: ORIGIN }));

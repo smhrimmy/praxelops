@@ -3,18 +3,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import {
   Search,
-  Server,
   Terminal,
   FolderTree,
-  Bot,
-  Rocket,
-  ShieldCheck,
   Sun,
   Moon,
   Plus,
+  PanelLeft,
+  Activity,
   X,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
+import { WORKSPACES } from "./workspaces";
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -23,10 +22,12 @@ interface CommandPaletteProps {
   onSelectServer: (server: ServerHost) => void;
   onConnectSSH: (server: ServerHost) => void;
   onOpenSFTP: (server: ServerHost) => void;
+  onOpenMonitor: (server: ServerHost) => void;
   onSelectView: (view: string) => void;
   onAddServer: () => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
+  onToggleSidebar: () => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -36,10 +37,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectServer,
   onConnectSSH,
   onOpenSFTP,
+  onOpenMonitor,
   onSelectView,
   onAddServer,
   theme,
   onToggleTheme,
+  onToggleSidebar,
 }) => {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -54,6 +57,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   }, [isOpen]);
 
   // Construct searchable action items
+  const workspaceActions = WORKSPACES.map((w, index) => ({
+    id: `ws-${w.id}`,
+    title: `Go to ${w.label}`,
+    subtitle: `Open the ${w.label} workspace (Ctrl/⌘+${index + 1})`,
+    icon: w.icon,
+    category: "Workspaces",
+    action: () => {
+      onSelectView(w.id);
+      onClose();
+    },
+  }));
+
   const baseActions = [
     {
       id: "act-add-server",
@@ -67,42 +82,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       },
     },
     {
-      id: "act-ai-diagnose",
-      title: "Run Fleet AI Diagnostics",
-      subtitle: "Scan all active nodes for anomalies and bottlenecks",
-      icon: Bot,
-      category: "Operations",
+      id: "act-sidebar",
+      title: "Toggle Sidebar",
+      subtitle: "Collapse or expand the workspace sidebar (Ctrl/⌘+B)",
+      icon: PanelLeft,
+      category: "Preferences",
       action: () => {
-        onSelectView("ai-ops");
-        onClose();
-      },
-    },
-    {
-      id: "act-deployments",
-      title: "Open Deployments & Workflows",
-      subtitle: "View active pipelines, build logs and rollback triggers",
-      icon: Rocket,
-      category: "Navigation",
-      action: () => {
-        onSelectView("deployments");
-        onClose();
-      },
-    },
-    {
-      id: "act-audit",
-      title: "View Security Audit Log",
-      subtitle: "Inspect authenticated sessions, approvals and commands",
-      icon: ShieldCheck,
-      category: "Navigation",
-      action: () => {
-        onSelectView("audit");
+        onToggleSidebar();
         onClose();
       },
     },
     {
       id: "act-theme",
-      title: `Switch to ${theme === "dark" ? "Light" : "Dark"} Mode`,
-      subtitle: "Toggle macOS dark/light glass appearance",
+      title: `Switch to ${theme === "dark" ? "Light" : "Dark"} Theme`,
+      subtitle: "Toggle the dark/light appearance",
       icon: theme === "dark" ? Sun : Moon,
       category: "Preferences",
       action: () => {
@@ -116,11 +109,22 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     {
       id: `srv-ssh-${s.id}`,
       title: `Connect SSH Terminal: ${s.name}`,
-      subtitle: `${s.username}@${s.host}:${s.port} (${s.status})`,
+      subtitle: `${s.username}@${s.host}:${s.port}`,
       icon: Terminal,
       category: "Servers",
       action: () => {
         onConnectSSH(s);
+        onClose();
+      },
+    },
+    {
+      id: `srv-mon-${s.id}`,
+      title: `System Monitor: ${s.name}`,
+      subtitle: "Live CPU, memory, disk, processes and services",
+      icon: Activity,
+      category: "Servers",
+      action: () => {
+        onOpenMonitor(s);
         onClose();
       },
     },
@@ -137,7 +141,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     },
   ]);
 
-  const allItems = [...serverActions, ...baseActions];
+  const allItems = [...workspaceActions, ...serverActions, ...baseActions];
 
   const filteredItems = allItems.filter(
     (item) =>
@@ -168,28 +172,38 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-black/40 backdrop-blur-sm animate-in fade-in duration-150">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-16 sm:pt-20 bg-black/40 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
-        className="w-full max-w-xl bg-white/90 dark:bg-neutral-900/95 backdrop-blur-2xl rounded-xl border border-black/10 dark:border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[70vh]"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        className="w-full max-w-xl bg-elevated rounded-xl border border-line shadow-2xl overflow-hidden flex flex-col max-h-[70dvh]"
         onKeyDown={handleKeyDown}
       >
         {/* Search Input Bar */}
-        <div className="flex items-center px-4 py-3 border-b border-black/5 dark:border-white/10">
-          <Search className="w-4 h-4 text-neutral-400 mr-2.5 shrink-0" />
+        <div className="flex items-center px-4 py-3 border-b border-line">
+          <Search className="w-4 h-4 text-fg-muted mr-2.5 shrink-0" />
           <input
             ref={inputRef}
             type="text"
+            aria-label="Search commands"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
               setSelectedIndex(0);
             }}
             placeholder="Type a server, SSH command, or action..."
-            className="w-full bg-transparent text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none"
+            className="w-full bg-transparent text-sm text-fg placeholder:text-fg-muted focus:outline-none"
           />
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-neutral-400"
+            aria-label="Close command palette"
+            className="p-1.5 rounded hover:bg-hover text-fg-muted"
           >
             <X className="w-4 h-4" />
           </button>
@@ -198,7 +212,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         {/* Results List */}
         <div className="overflow-y-auto p-2 space-y-1">
           {filteredItems.length === 0 ? (
-            <div className="py-8 text-center text-xs text-neutral-400">
+            <div className="py-8 text-center text-xs text-fg-muted">
               No matching servers or operations found.
             </div>
           ) : (
@@ -208,12 +222,15 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               return (
                 <button
                   key={item.id}
+                  ref={(el) => {
+                    if (isSelected) el?.scrollIntoView({ block: "nearest" });
+                  }}
                   onClick={item.action}
                   onMouseEnter={() => setSelectedIndex(index)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left transition ${
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left transition-colors ${
                     isSelected
                       ? "bg-blue-600 text-white"
-                      : "hover:bg-black/5 dark:hover:bg-white/5 text-neutral-800 dark:text-neutral-200"
+                      : "hover:bg-hover text-fg"
                   }`}
                 >
                   <div className="flex items-center space-x-3 truncate">
@@ -221,7 +238,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                       className={`w-4 h-4 shrink-0 ${
                         isSelected
                           ? "text-white"
-                          : "text-neutral-400 dark:text-neutral-500"
+                          : "text-fg-muted"
                       }`}
                     />
                     <div className="truncate">
@@ -231,8 +248,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                       <div
                         className={`text-[11px] truncate ${
                           isSelected
-                            ? "text-blue-100"
-                            : "text-neutral-400 dark:text-neutral-500"
+                            ? "text-white"
+                            : "text-fg-muted"
                         }`}
                       >
                         {item.subtitle}
@@ -244,7 +261,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                     className={`text-[10px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0 ${
                       isSelected
                         ? "bg-white/20 text-white"
-                        : "bg-neutral-100 dark:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
+                        : "bg-sunken-2 text-fg-muted"
                     }`}
                   >
                     {item.category}
@@ -256,7 +273,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         </div>
 
         {/* Footer shortcuts */}
-        <div className="px-4 py-2 bg-neutral-50/60 dark:bg-neutral-950/40 border-t border-black/5 dark:border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
+        <div className="px-4 py-2 bg-chrome border-t border-line flex items-center justify-between text-[11px] text-fg-muted">
           <span>
             Navigate with <kbd className="font-mono font-semibold">↑</kbd>{" "}
             <kbd className="font-mono font-semibold">↓</kbd>

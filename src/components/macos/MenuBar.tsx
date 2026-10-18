@@ -1,17 +1,13 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import {
-  Terminal,
-  Wifi,
-  Sun,
-  Moon,
-  Search,
-  ShieldCheck,
-  Server,
-  Zap,
-  LogOut,
-} from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Terminal, Sun, Moon, Search, LogOut, Server, Clock, MoreHorizontal } from "lucide-react";
+import { WORKSPACES } from "./workspaces";
+import { useModKeyLabel } from "./platform";
+import { FleetStatus, FleetStatusList } from "./FleetStatus";
+import { orderEntries } from "@/lib/fleet/status";
+import { summarizeFleet } from "@/lib/fleet/health";
+import type { FleetServer } from "@/lib/fleet/types";
 
 interface MenuBarProps {
   onOpenCommandPalette: () => void;
@@ -19,8 +15,14 @@ interface MenuBarProps {
   onSelectView: (view: string) => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
-  onlineCount: number;
-  totalServers: number;
+  /** Inventory with real health data; drives the per-server status indicator. */
+  servers: FleetServer[];
+  /** Epoch ms of the last successful server listing (0 = not loaded yet). */
+  fleetFetchedAt: number;
+  /** Open the System Monitor on one server's detail page. */
+  onOpenMonitorServer: (serverId: string) => void;
+  /** Open the System Monitor overview. */
+  onOpenMonitor: () => void;
   onLogout: () => void;
 }
 
@@ -30,17 +32,22 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSelectView,
   theme,
   onToggleTheme,
-  onlineCount,
-  totalServers,
+  servers,
+  fleetFetchedAt,
+  onOpenMonitorServer,
+  onOpenMonitor,
   onLogout,
 }) => {
   const [time, setTime] = useState<string>("");
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const modKey = useModKeyLabel();
 
   useEffect(() => {
     const updateTime = () => {
-      const now = new Date();
       setTime(
-        now.toLocaleTimeString([], {
+        new Date().toLocaleTimeString([], {
           weekday: "short",
           month: "short",
           day: "numeric",
@@ -50,134 +57,171 @@ export const MenuBar: React.FC<MenuBarProps> = ({
       );
     };
     updateTime();
-    const timer = setInterval(updateTime, 1000);
+    const timer = setInterval(updateTime, 15000);
     return () => clearInterval(timer);
   }, []);
 
+  // Close the overflow menu on outside press or Escape.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onPointer = (e: PointerEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMoreOpen(false);
+        moreButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
+  const summary = summarizeFleet(servers);
+  const hostLabel = `${summary.total} ${summary.total === 1 ? "host" : "hosts"}`;
+  const overflowSummary =
+    summary.total === 0
+      ? "No hosts registered"
+      : `${hostLabel}: ${summary.reachable} reachable, ${summary.attention} need attention`;
+  const iconBtn =
+    "p-1.5 rounded-md hover:bg-hover text-fg-2 hover:text-fg transition-colors shrink-0";
+
   return (
-    <header className="h-8 w-full bg-white/70 dark:bg-black/60 backdrop-blur-md border-b border-black/5 dark:border-white/10 px-3 flex items-center justify-between text-xs font-medium select-none z-50">
+    <header className="h-9 w-full bg-chrome backdrop-blur-md border-b border-line px-2 sm:px-3 flex items-center justify-between gap-2 text-xs font-medium select-none relative z-50">
       {/* Left: App Title and Menus */}
-      <div className="flex items-center space-x-4">
-        <div className="flex items-center space-x-1.5 font-bold tracking-tight text-neutral-900 dark:text-neutral-100 cursor-pointer">
-          <Terminal className="w-3.5 h-3.5 text-blue-500" />
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-1.5 font-bold tracking-tight text-fg shrink-0">
+          <Terminal aria-hidden="true" className="w-3.5 h-3.5 text-info" />
           <span>PraxelOps</span>
         </div>
 
-        <nav className="hidden sm:flex items-center space-x-3 text-neutral-600 dark:text-neutral-300">
-          <button
-            onClick={() => onSelectView("fleet")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "fleet"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            Fleet
-          </button>
-          <button
-            onClick={() => onSelectView("terminal")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "terminal"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            Terminal
-          </button>
-          <button
-            onClick={() => onSelectView("sftp")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "sftp"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            SFTP
-          </button>
-          <button
-            onClick={() => onSelectView("ai-ops")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "ai-ops"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            AI Copilot
-          </button>
-          <button
-            onClick={() => onSelectView("deployments")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "deployments"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            Deploy
-          </button>
-          <button
-            onClick={() => onSelectView("audit")}
-            className={`px-1.5 py-0.5 rounded transition ${
-              activeView === "audit"
-                ? "bg-black/10 dark:bg-white/10 text-neutral-950 dark:text-white font-semibold"
-                : "hover:text-neutral-950 dark:hover:text-white"
-            }`}
-          >
-            Audit
-          </button>
+        <nav aria-label="Workspace menu" className="hidden lg:flex items-center gap-1 text-fg-2">
+          {WORKSPACES.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              onClick={() => onSelectView(w.id)}
+              aria-current={activeView === w.id ? "page" : undefined}
+              className={`px-2 py-0.5 rounded ${
+                activeView === w.id
+                  ? "bg-sunken-2 text-fg font-semibold"
+                  : "hover:bg-hover hover:text-fg"
+              }`}
+            >
+              {w.shortLabel}
+            </button>
+          ))}
         </nav>
       </div>
 
       {/* Right: Status Indicators & Quick Actions */}
-      <div className="flex items-center space-x-3 text-neutral-600 dark:text-neutral-300">
-        {/* Fleet health badge */}
-        <div
-          title={`${onlineCount} of ${totalServers} servers online`}
-          className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-semibold text-[11px]">
-            {onlineCount}/{totalServers} Online
-          </span>
-        </div>
+      <div className="flex items-center gap-1 sm:gap-2 text-fg-2 min-w-0">
+        {/* Per-server health: one dot per host (colour + shape), popover with the full list (sm and up). */}
+        <FleetStatus servers={servers} fetchedAt={fleetFetchedAt} onOpenServer={onOpenMonitorServer} onOpenOverview={onOpenMonitor} />
 
         {/* Global Search / Command Palette shortcut */}
         <button
+          type="button"
           onClick={onOpenCommandPalette}
-          className="flex items-center space-x-1.5 px-2 py-0.5 rounded bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 transition text-neutral-500 dark:text-neutral-400"
-          title="Open Command Palette (Cmd/Ctrl + K)"
+          aria-label="Open command palette"
+          aria-keyshortcuts="Control+K Meta+K"
+          title={`Open command palette (${modKey}+K)`}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-sunken hover:bg-hover-strong transition-colors text-fg-2 shrink-0"
         >
-          <Search className="w-3 h-3" />
-          <span className="text-[10px] font-mono">⌘K</span>
+          <Search aria-hidden="true" className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline text-[10px] font-mono">{modKey} K</span>
         </button>
 
         {/* Theme toggle */}
         <button
+          type="button"
           onClick={onToggleTheme}
-          aria-label="Toggle theme"
-          className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 transition text-neutral-600 dark:text-neutral-300"
-          title={`Switch to ${theme === "dark" ? "Light" : "Dark"} Mode`}
+          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+          className={iconBtn}
         >
           {theme === "dark" ? (
-            <Sun className="w-3.5 h-3.5 text-amber-400" />
+            <Sun aria-hidden="true" className="w-3.5 h-3.5 text-warning" />
           ) : (
-            <Moon className="w-3.5 h-3.5 text-neutral-700" />
+            <Moon aria-hidden="true" className="w-3.5 h-3.5" />
           )}
         </button>
 
-        {/* Sign out */}
+        {/* Sign out (inline from sm up) */}
         <button
+          type="button"
           onClick={onLogout}
           aria-label="Sign out"
-          className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 transition text-neutral-600 dark:text-neutral-300"
           title="Sign out"
+          className={`${iconBtn} hidden sm:inline-flex`}
         >
-          <LogOut className="w-3.5 h-3.5" />
+          <LogOut aria-hidden="true" className="w-3.5 h-3.5" />
         </button>
 
-        {/* Live Clock */}
-        <span className="font-mono text-[11px] text-neutral-700 dark:text-neutral-300">
-          {time || "Loading..."}
+        {/* Clock (md and up) */}
+        <span className="hidden md:inline font-mono text-[11px] text-fg-2 whitespace-nowrap tabular-nums">
+          {time}
         </span>
+
+        {/* Overflow menu below sm: secondary items collapse here */}
+        <div ref={moreRef} className="relative sm:hidden">
+          <button
+            ref={moreButtonRef}
+            type="button"
+            onClick={() => setMoreOpen((o) => !o)}
+            aria-label="More"
+            aria-haspopup="menu"
+            aria-expanded={moreOpen}
+            aria-controls="menubar-overflow"
+            className={iconBtn}
+          >
+            <MoreHorizontal aria-hidden="true" className="w-4 h-4" />
+          </button>
+          {moreOpen && (
+            <div
+              id="menubar-overflow"
+              role="menu"
+              aria-label="More"
+              className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-line bg-elevated shadow-2xl py-1 z-50"
+            >
+              <div role="presentation" className="px-3 py-1.5 flex items-center gap-2 text-fg-muted">
+                <Server aria-hidden="true" className="w-3.5 h-3.5" />
+                <span>{overflowSummary}</span>
+              </div>
+              {servers.length > 0 && (
+                <FleetStatusList
+                  variant="menu"
+                  entries={orderEntries(servers, fleetFetchedAt, Date.now())}
+                  onSelect={(id) => {
+                    setMoreOpen(false);
+                    onOpenMonitorServer(id);
+                  }}
+                />
+              )}
+              <div role="presentation" className="px-3 py-1.5 flex items-center gap-2 text-fg-muted">
+                <Clock aria-hidden="true" className="w-3.5 h-3.5" />
+                <span className="font-mono text-[11px]">{time}</span>
+              </div>
+              <div role="separator" className="my-1 border-t border-line" />
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  onLogout();
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-fg hover:bg-hover"
+              >
+                <LogOut aria-hidden="true" className="w-3.5 h-3.5" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

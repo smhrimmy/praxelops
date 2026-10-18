@@ -42,8 +42,21 @@ export function getMasterSecret(): string {
 
   const generatedKey = crypto.randomBytes(32).toString("hex");
   try {
-    fs.writeFileSync(KEY_FILE, generatedKey, { encoding: "utf-8", mode: 0o600 });
-  } catch {
+    // "wx": exclusive create. The web app and the terminal gateway may first-start at the same moment; the loser
+    // must adopt the winner's key instead of overwriting it (two different keys would make the credential vault
+    // unreadable by one of the processes).
+    fs.writeFileSync(KEY_FILE, generatedKey, { encoding: "utf-8", mode: 0o600, flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      for (let attempt = 0; attempt < 20; attempt++) {
+        try {
+          const stored = fs.readFileSync(KEY_FILE, "utf-8").trim();
+          if (stored.length >= 32) return stored;
+        } catch {}
+        // The winner may not have finished writing yet.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    }
     // If filesystem is read-only, return memory key
   }
 

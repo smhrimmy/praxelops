@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import fs from "fs";
+import path from "path";
+import crypto from "crypto";
 import { TicketService } from "./ticket";
+import { closeDb, getDb, getDbPath } from "../db/database";
 
 describe("TicketService", () => {
   // Tickets live under the per-test-file PRAXELOPS_DATA_DIR (see src/test/setupDataDir.ts).
@@ -88,14 +91,13 @@ describe("TicketService", () => {
     expect(goodPurpose).not.toBeNull();
   });
 
-  it("supports cross-process persistence and survives process memory restarts", () => {
+  it("supports cross-process persistence and survives process restarts", () => {
     const t = TicketService.issueTicket("operator-1", "srv-shared-01", 60);
 
-    // Simulate process A shutting down by wiping in-memory Map
-    // (mimicking process B starting up or gateway running in a separate process)
-    (TicketService as unknown as { tickets: Map<string, unknown> }).tickets.clear();
+    // Simulate process A shutting down and process B (e.g. the terminal gateway) starting up:
+    // a brand-new connection to the shared database must see the ticket.
+    closeDb();
 
-    // Process B should successfully consume the ticket from shared disk store
     const consumedInProcessB = TicketService.consumeTicket(t.ticket);
     expect(consumedInProcessB).not.toBeNull();
     expect(consumedInProcessB?.operatorId).toBe("operator-1");
@@ -126,15 +128,40 @@ describe("TicketService", () => {
     expect(successes[0]?.serverId).toBe("srv-race-01");
   });
 
-  it("stores ticket files inside the configured data dir, not the repo", () => {
+  it("stores tickets in the database inside the configured data dir, not the repo", () => {
     const t = TicketService.issueTicket("operator-1", "srv-101", 60);
-    const dir = TicketService.getStorageDir();
-    expect(dir.startsWith(process.env.PRAXELOPS_DATA_DIR ?? "<unset>")).toBe(true);
-    expect(fs.existsSync(`${dir}/${t.ticket}.json`)).toBe(true);
-    if (process.platform !== "win32") {
-      expect(fs.statSync(`${dir}/${t.ticket}.json`).mode & 0o777).toBe(0o600);
-      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    expect(getDbPath().startsWith(process.env.PRAXELOPS_DATA_DIR ?? "<unset>")).toBe(true);
+    // Only a digest of the bearer token is stored.
+    const digest = crypto.createHash("sha256").update(t.ticket).digest("hex");
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM tickets WHERE id = ?").get(t.ticket)?.n).toBe(0);
+    const row = getDb().prepare("SELECT operator_id, server_id, purpose FROM tickets WHERE id = ?").get(digest);
+    expect(row?.operator_id).toBe("operator-1");
+    expect(row?.server_id).toBe("srv-101");
+    expect(row?.purpose).toBe("terminal_shell");
+    // ...so the bearer token itself is nowhere in the database file or its write-ahead log.
+    const bytes = [getDbPath(), `${getDbPath()}-wal`]
+      .filter((f) => fs.existsSync(f))
+      .map((f) => fs.readFileSync(f).toString("latin1"))
+      .join(" ");
+    expect(bytes).not.toContain(t.ticket);
+    // The legacy file-per-ticket directory is no longer used.
+    expect(fs.existsSync(path.join(process.env.PRAXELOPS_DATA_DIR ?? "<unset>", "tickets"))).toBe(false);
+  });
+
+  it("burns a ticket even when origin or purpose binding fails (no second chance)", () => {
+    const t = TicketService.issueTicket("operator-1", "srv-101", { ttlSeconds: 60, origin: "https://ops.example.com" });
+    expect(TicketService.consumeTicket(t.ticket, { expectedOrigin: "https://evil.example" })).toBeNull();
+    expect(TicketService.consumeTicket(t.ticket, { expectedOrigin: "https://ops.example.com" })).toBeNull();
+    expect(TicketService.getActiveTicketCount()).toBe(0);
+  });
+
+  it("rejects malformed ticket ids without touching the database", () => {
+    const t = TicketService.issueTicket("operator-1", "srv-101", 60);
+    for (const bad of ["", "tkt_", "../etc/passwd", "tkt_a b", "tkt_a'; DELETE FROM tickets;--", "nope_abc", "tkt_abc/../x"]) {
+      expect(TicketService.consumeTicket(bad)).toBeNull();
     }
+    expect(TicketService.getActiveTicketCount()).toBe(1);
+    expect(TicketService.consumeTicket(t.ticket)).not.toBeNull();
   });
 
   it("rejects expired tickets", () => {
@@ -142,9 +169,10 @@ describe("TicketService", () => {
     const t = TicketService.issueTicket("operator-1", "srv-101", -1);
     const consumed = TicketService.consumeTicket(t.ticket);
     expect(consumed).toBeNull();
+    expect(TicketService.getActiveTicketCount()).toBe(0);
   });
 
-  it("prunes expired tickets correctly from both memory and disk", () => {
+  it("prunes expired tickets correctly from the database", () => {
     TicketService.issueTicket("operator-1", "srv-1", -5);
     TicketService.issueTicket("operator-1", "srv-2", 60);
 

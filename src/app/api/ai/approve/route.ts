@@ -5,6 +5,9 @@ import { ApprovalSecurityService } from "@/lib/ai/approval";
 import { AuthService } from "@/lib/security/auth";
 import { AIApprovalExecutionSchema } from "@/types/ai";
 
+// Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
+export const runtime = "nodejs";
+
 export async function POST(request: Request) {
   try {
     const auth = AuthService.authenticateRequest(request);

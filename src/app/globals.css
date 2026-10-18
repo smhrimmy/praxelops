@@ -1,67 +1,189 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f5f5f7;
-  --foreground: #1d1d1f;
-  --window-bg: rgba(255, 255, 255, 0.78);
-  --window-border: rgba(0, 0, 0, 0.08);
-  --sidebar-bg: rgba(240, 240, 245, 0.72);
-  --card-bg: rgba(255, 255, 255, 0.85);
-  --card-border: rgba(0, 0, 0, 0.06);
-  --accent: #0071e3;
-  --accent-hover: #0077ed;
-  --accent-foreground: #ffffff;
-  --traffic-red: #ff5f56;
-  --traffic-yellow: #ffbd2e;
-  --traffic-green: #27c93f;
-  --subtle-text: #86868b;
-  --terminal-bg: #1e1e1e;
-  --terminal-fg: #f8f8f2;
-}
+/*
+ * Tailwind's `dark:` variant follows the data-theme attribute (set before first
+ * paint by the inline script in layout.tsx), not the OS media query. Without this
+ * the stored theme choice and the OS preference fight each other.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+/* ------------------------------------------------------------------ */
+/* Design tokens. Dark is the default; [data-theme="light"] overrides.  */
+/* [data-theme="dark"] on a subtree (the always-dark terminal) re-applies */
+/* the dark tokens there even when the page itself is light.            */
+/* Contrast targets (WCAG AA): fg/fg-2/fg-muted >= 4.5:1 on bg, surface, */
+/* sunken; line-strong (control borders) >= 3:1.                        */
+/* ------------------------------------------------------------------ */
+:root,
 [data-theme="dark"] {
-  --background: #0f1015;
-  --foreground: #f5f5f7;
-  --window-bg: rgba(26, 27, 36, 0.82);
-  --window-border: rgba(255, 255, 255, 0.08);
-  --sidebar-bg: rgba(20, 21, 28, 0.78);
-  --card-bg: rgba(30, 31, 42, 0.85);
-  --card-border: rgba(255, 255, 255, 0.08);
+  color-scheme: dark;
+
+  --bg: #0f1015;
+  --bg-glow: rgba(41, 151, 255, 0.1);
+  --surface: rgba(26, 27, 36, 0.86); /* window */
+  --surface-2: rgba(32, 33, 45, 0.9); /* cards, tables */
+  --elevated: #1f2029; /* modals, palette, menus */
+  --chrome: rgba(10, 11, 16, 0.55); /* menu bar, title bar, footers */
+  --sidebar: rgba(18, 19, 26, 0.85);
+  --content: rgba(8, 9, 13, 0.25);
+  --input: rgba(8, 9, 13, 0.45);
+  --sunken: rgba(255, 255, 255, 0.07);
+  --sunken-2: rgba(255, 255, 255, 0.12);
+  --track: #3a3b46;
+  --hover: rgba(255, 255, 255, 0.09);
+  --hover-strong: rgba(255, 255, 255, 0.15);
+  --line: rgba(255, 255, 255, 0.12);
+  --line-strong: #6f7080; /* 3:1+ against surfaces: input / control borders */
+
+  --fg: #f5f5f7;
+  --fg-2: #d2d2d7;
+  --fg-muted: #a1a1a6;
+
   --accent: #2997ff;
-  --accent-hover: #409cff;
-  --accent-foreground: #ffffff;
+  --accent-fg: #ffffff;
+  --focus: #64b5ff;
+
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #fb7185;
+  --info: #60a5fa;
+  --violet: #c4a5ff;
+  --orange: #fb923c;
+  --teal: #2dd4bf;
+
   --traffic-red: #ff5f56;
   --traffic-yellow: #ffbd2e;
   --traffic-green: #27c93f;
-  --subtle-text: #a1a1a6;
   --terminal-bg: #14151c;
   --terminal-fg: #f5f5f7;
+
+  /* Legacy aliases kept for any remaining references */
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --window-bg: var(--surface);
+  --window-border: var(--line);
+  --sidebar-bg: var(--sidebar);
+  --card-bg: var(--surface-2);
+  --card-border: var(--line);
+  --accent-hover: #409cff;
+  --subtle-text: var(--fg-muted);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #eef0f5;
+  --bg-glow: rgba(0, 113, 227, 0.12);
+  --surface: rgba(255, 255, 255, 0.9);
+  --surface-2: #ffffff;
+  --elevated: #ffffff;
+  --chrome: rgba(244, 245, 249, 0.9);
+  --sidebar: rgba(246, 247, 251, 0.95);
+  --content: rgba(255, 255, 255, 0.35);
+  --input: #ffffff;
+  --sunken: rgba(0, 0, 0, 0.055);
+  --sunken-2: rgba(0, 0, 0, 0.09);
+  --track: #d8dae2;
+  --hover: rgba(0, 0, 0, 0.06);
+  --hover-strong: rgba(0, 0, 0, 0.1);
+  --line: rgba(0, 0, 0, 0.13);
+  --line-strong: #7c7d88;
+
+  --fg: #1d1d1f; /* 15.9:1 on white */
+  --fg-2: #3c3c43; /* 10.7:1 */
+  --fg-muted: #5e5e66; /* 6.2:1 on white, 5.3:1 on sunken */
+
+  --accent: #0066cc;
+  --accent-fg: #ffffff;
+  --focus: #0a5bd6;
+
+  --success: #065f46;
+  --warning: #92400e;
+  --danger: #be123c;
+  --info: #1d4ed8;
+  --violet: #6d28d9;
+  --orange: #9a3412;
+  --teal: #115e59;
+
+  --terminal-bg: #1e1e1e;
+  --terminal-fg: #f8f8f2;
+
+  --accent-hover: #0077ed;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-elevated: var(--elevated);
+  --color-chrome: var(--chrome);
+  --color-sidebar: var(--sidebar);
+  --color-content: var(--content);
+  --color-input: var(--input);
+  --color-sunken: var(--sunken);
+  --color-sunken-2: var(--sunken-2);
+  --color-track: var(--track);
+  --color-hover: var(--hover);
+  --color-hover-strong: var(--hover-strong);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-muted: var(--fg-muted);
+  --color-accent: var(--accent);
+  --color-focus: var(--focus);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-violet: var(--violet);
+  --color-orange: var(--orange);
+  --color-teal: var(--teal);
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: var(--bg);
+  color: var(--fg);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
   overflow: hidden;
-  height: 100vh;
-  width: 100vw;
+  width: 100%;
+  height: 100dvh;
   user-select: none;
+}
+
+/* Text that people need to select/copy even though the shell is non-selectable */
+table,
+pre,
+code,
+.selectable {
+  user-select: text;
+}
+
+.app-bg {
+  background:
+    radial-gradient(ellipse at top, var(--bg-glow), transparent 65%),
+    var(--bg);
 }
 
 /* Translucent Glassmorphism */
 .macos-glass {
-  background-color: var(--window-bg);
+  background-color: var(--surface);
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid var(--window-border);
+  border: 1px solid var(--line);
 }
 
 .macos-card {
-  background-color: var(--card-bg);
+  background-color: var(--surface-2);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid var(--card-border);
-  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.08);
 }
 
 /* Traffic Lights */
@@ -72,8 +194,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
-  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  transition: filter 0.15s ease;
+  border: 0.5px solid rgba(0, 0, 0, 0.2);
 }
 
 .traffic-close {
@@ -88,6 +210,12 @@ body {
   background-color: var(--traffic-green);
 }
 
+/* Visible keyboard focus on every interactive element */
+:where(button, a, summary, select, input, textarea, [role="button"], [role="menuitem"], [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 /* Slim Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
@@ -99,10 +227,22 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(134, 134, 139, 0.3);
+  background: rgba(134, 134, 139, 0.45);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(134, 134, 139, 0.5);
+  background: rgba(134, 134, 139, 0.7);
+}
+
+/* Respect reduced-motion preferences: no decorative animation or smooth transitions */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
