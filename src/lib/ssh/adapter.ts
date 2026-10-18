@@ -3,6 +3,54 @@ import { ServerHost } from "@/types/server";
 import { RemoteFileItem } from "@/types/ssh";
 import { KnownHostsService } from "./knownHosts";
 
+/**
+ * Host key policy for a connection.
+ *  - "tofu" (default, interactive use): an unknown host is enrolled on first use, a changed key is rejected.
+ *  - "pinned_only" (unattended collectors): the host key must already be pinned and match; an unknown host or a
+ *    changed key aborts the handshake BEFORE authentication, and nothing is enrolled, written or audited here.
+ */
+export type HostKeyPolicy = "tofu" | "pinned_only";
+
+export interface ExecOptions {
+  hostKeyPolicy?: HostKeyPolicy;
+  /** Abort (and fail with kind "output_limit") if stdout + stderr exceed this many bytes. */
+  maxOutputBytes?: number;
+}
+
+export type SshExecErrorKind =
+  | "timeout"
+  | "unreachable"
+  | "auth_failed"
+  | "host_key_mismatch"
+  | "host_key_not_pinned"
+  | "output_limit"
+  | "exec_error";
+
+/** Error thrown by executeCommand; `kind` lets callers classify the failure without parsing messages. */
+export class SshExecError extends Error {
+  readonly kind: SshExecErrorKind;
+  readonly expectedFingerprint?: string;
+  readonly receivedFingerprint?: string;
+
+  constructor(
+    message: string,
+    kind: SshExecErrorKind,
+    fingerprints: { expectedFingerprint?: string; receivedFingerprint?: string } = {}
+  ) {
+    super(message);
+    this.name = "SshExecError";
+    this.kind = kind;
+    this.expectedFingerprint = fingerprints.expectedFingerprint;
+    this.receivedFingerprint = fingerprints.receivedFingerprint;
+  }
+}
+
+interface HostKeyFailure {
+  kind: "host_key_mismatch" | "host_key_not_pinned";
+  expectedFingerprint?: string;
+  receivedFingerprint?: string;
+}
+
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -36,7 +84,9 @@ export class SSHAdapter {
 
   private static getConnectConfig(
     server: ServerHost,
-    credentials?: { password?: string; privateKey?: string }
+    credentials?: { password?: string; privateKey?: string },
+    policy: HostKeyPolicy = "tofu",
+    onHostKeyFailure?: (failure: HostKeyFailure) => void
   ): ConnectConfig {
     const config: ConnectConfig = {
       host: server.host,
@@ -45,6 +95,22 @@ export class SSHAdapter {
       readyTimeout: 15000,
       keepaliveInterval: 10000,
       hostVerifier: (keyBuffer: Buffer) => {
+        if (policy === "pinned_only") {
+          const check = KnownHostsService.checkPinnedHostKey(server.host, server.port, keyBuffer);
+          if (check.status === "match") return true;
+          if (check.status === "mismatch") {
+            onHostKeyFailure?.({
+              kind: "host_key_mismatch",
+              expectedFingerprint: check.expectedFingerprint,
+              receivedFingerprint: check.fingerprint,
+            });
+            throw new Error(
+              `SECURITY ALERT: Host key mismatch for ${server.host}:${server.port}! Expected '${check.expectedFingerprint}', but received '${check.fingerprint}'. Possible man-in-the-middle attack.`
+            );
+          }
+          onHostKeyFailure?.({ kind: "host_key_not_pinned", receivedFingerprint: check.fingerprint });
+          throw new Error(`Host key for ${server.host}:${server.port} is not pinned; refusing to trust it on first use`);
+        }
         const verification = KnownHostsService.verifyHostKey(
           server.host,
           server.port,
@@ -71,44 +137,61 @@ export class SSHAdapter {
   }
 
   /**
-   * Execute a remote command via genuine SSH connection with host key verification
+   * Execute a remote command via genuine SSH connection with host key verification.
+   * Failures are thrown as SshExecError (message text unchanged from earlier versions) carrying a machine-readable kind.
    */
   static async executeCommand(
     server: ServerHost,
     command: string,
     timeoutMs: number = 30000,
-    credentials?: { password?: string; privateKey?: string }
+    credentials?: { password?: string; privateKey?: string },
+    options: ExecOptions = {}
   ): Promise<ExecResult> {
     const startTime = Date.now();
+    const maxOutputBytes = options.maxOutputBytes;
 
     return new Promise((resolve, reject) => {
       const conn = new Client();
       let stdout = "";
       let stderr = "";
+      let outputBytes = 0;
       let isTimedOut = false;
       let hasEnded = false;
+      let hostKeyFailure: HostKeyFailure | undefined;
+
+      const fail = (error: SshExecError): void => {
+        clearTimeout(timer);
+        if (hasEnded) return;
+        hasEnded = true;
+        try {
+          conn.end();
+        } catch {}
+        try {
+          // end() waits for a graceful close; destroy() makes sure a hung TCP connection cannot linger.
+          conn.destroy();
+        } catch {}
+        reject(error);
+      };
 
       const timer = setTimeout(() => {
         isTimedOut = true;
-        if (!hasEnded) {
-          hasEnded = true;
-          try {
-            conn.end();
-          } catch {}
-          reject(new Error(`SSH execution timed out after ${timeoutMs}ms on ${server.host}:${server.port}`));
-        }
+        fail(new SshExecError(`SSH execution timed out after ${timeoutMs}ms on ${server.host}:${server.port}`, "timeout"));
       }, timeoutMs);
+
+      const countOutput = (data: Buffer): boolean => {
+        outputBytes += data.length;
+        if (maxOutputBytes !== undefined && outputBytes > maxOutputBytes) {
+          fail(new SshExecError(`SSH command output exceeded ${maxOutputBytes} bytes on ${server.host}:${server.port}`, "output_limit"));
+          return false;
+        }
+        return true;
+      };
 
       conn
         .on("ready", () => {
           conn.exec(command, (err, stream) => {
             if (err) {
-              clearTimeout(timer);
-              if (!hasEnded) {
-                hasEnded = true;
-                conn.end();
-              }
-              return reject(new Error(`SSH exec dispatch error: ${err.message}`));
+              return fail(new SshExecError(`SSH exec dispatch error: ${err.message}`, "exec_error"));
             }
 
             stream
@@ -117,30 +200,42 @@ export class SSHAdapter {
                 if (!hasEnded) {
                   hasEnded = true;
                   conn.end();
+                  resolve({
+                    stdout,
+                    stderr,
+                    code: code ?? 0,
+                    durationMs: Date.now() - startTime,
+                  });
                 }
-                resolve({
-                  stdout,
-                  stderr,
-                  code: code ?? 0,
-                  durationMs: Date.now() - startTime,
-                });
               })
               .on("data", (data: Buffer) => {
-                stdout += data.toString("utf-8");
+                if (countOutput(data)) stdout += data.toString("utf-8");
               })
               .stderr.on("data", (data: Buffer) => {
-                stderr += data.toString("utf-8");
+                if (countOutput(data)) stderr += data.toString("utf-8");
               });
           });
         })
-        .on("error", (err) => {
-          clearTimeout(timer);
-          if (!hasEnded && !isTimedOut) {
-            hasEnded = true;
-            reject(new Error(`SSH connection to ${server.host}:${server.port} failed: ${err.message}`));
+        .on("error", (err: Error & { level?: string }) => {
+          if (hasEnded || isTimedOut) return;
+          if (hostKeyFailure) {
+            return fail(
+              new SshExecError(err.message || `Host key verification failed for ${server.host}:${server.port}`, hostKeyFailure.kind, hostKeyFailure)
+            );
           }
+          const kind: SshExecErrorKind =
+            err.level === "client-authentication" ? "auth_failed" : err.level === "client-timeout" ? "timeout" : "unreachable";
+          fail(new SshExecError(`SSH connection to ${server.host}:${server.port} failed: ${err.message}`, kind));
         })
-        .connect(this.getConnectConfig(server, credentials));
+        .on("close", () => {
+          // The connection ended without a result (e.g. the server hung up mid-handshake): do not wait for the timer.
+          fail(new SshExecError(`SSH connection to ${server.host}:${server.port} closed before the command completed`, "unreachable"));
+        })
+        .connect(
+          this.getConnectConfig(server, credentials, options.hostKeyPolicy ?? "tofu", (failure) => {
+            hostKeyFailure = failure;
+          })
+        );
     });
   }
 

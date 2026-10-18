@@ -17,7 +17,8 @@ export type AuditEventType =
   | "server_deleted"
   | "auth_login"
   | "auth_logout"
-  | "security_alert";
+  | "security_alert"
+  | "server_health_changed";
 
 export interface AuditEvent {
   id: string;

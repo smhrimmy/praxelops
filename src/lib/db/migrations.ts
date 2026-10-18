@@ -121,6 +121,34 @@ export const MIGRATIONS: readonly Migration[] = [
       encryptPlaintextCredentials(db);
     },
   },
+  {
+    version: 3,
+    name: "metrics_samples_and_server_health",
+    // Agentless SSH metrics. Both tables reference servers(id) with ON DELETE CASCADE (foreign_keys is ON for every
+    // connection), so deleting a server removes its samples and health row.
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE metrics_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          server_id TEXT NOT NULL REFERENCES servers (id) ON DELETE CASCADE,
+          collected_at TEXT NOT NULL,
+          ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+          reason TEXT,
+          data TEXT
+        );
+        CREATE INDEX idx_metrics_samples_server_time ON metrics_samples (server_id, collected_at);
+        CREATE INDEX idx_metrics_samples_collected_at ON metrics_samples (collected_at);
+
+        CREATE TABLE server_health (
+          server_id TEXT PRIMARY KEY REFERENCES servers (id) ON DELETE CASCADE,
+          last_checked_at TEXT NOT NULL,
+          last_ok_at TEXT,
+          state TEXT NOT NULL CHECK (state IN ('reachable', 'unreachable', 'auth_failed', 'host_key_mismatch', 'host_key_not_pinned', 'unsupported_os', 'error')),
+          reason TEXT
+        );
+      `);
+    },
+  },
 ];
 
 export const LATEST_VERSION: number = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);

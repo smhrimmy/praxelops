@@ -16,6 +16,11 @@ const SELECT_ALL_SQL =
 
 type VerifyResult = { verified: boolean; isNew: boolean; fingerprint: string; error?: string };
 
+export type PinCheck =
+  | { status: "match"; fingerprint: string }
+  | { status: "not_pinned"; fingerprint: string }
+  | { status: "mismatch"; fingerprint: string; expectedFingerprint: string };
+
 type EnrollOutcome = { kind: "existing"; entry: KnownHostEntry } | { kind: "enrolled" };
 
 export class KnownHostsService {
@@ -83,6 +88,27 @@ export class KnownHostsService {
       return this.evaluatePin(outcome.entry, host, port, key, currentFingerprint);
     }
     return { verified: true, isNew: true, fingerprint: currentFingerprint };
+  }
+
+  /**
+   * Read-only pin lookup: never enrolls, never audits, never writes. Returns undefined when the host:port is not pinned.
+   * Used by callers (the metrics collector) that must not trust a host on first use.
+   */
+  static getPin(host: string, port: number): KnownHostEntry | undefined {
+    const row = prepare(getDb(), SELECT_ONE_SQL).get(`${host}:${port}`);
+    return row === undefined ? undefined : rowToKnownHost(row as SqlRow);
+  }
+
+  /**
+   * Read-only comparison of a presented host key against the pin: no enrollment, no audit event, no write.
+   * Fails closed on a malformed pin row (rowToKnownHost throws).
+   */
+  static checkPinnedHostKey(host: string, port: number, keyBuffer: Buffer): PinCheck {
+    const fingerprint = this.computeFingerprint(keyBuffer);
+    const pin = this.getPin(host, port);
+    if (pin === undefined) return { status: "not_pinned", fingerprint };
+    if (pin.fingerprint === fingerprint) return { status: "match", fingerprint };
+    return { status: "mismatch", fingerprint, expectedFingerprint: pin.fingerprint };
   }
 
   private static evaluatePin(

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { StorageService } from "@/lib/storage";
 import { AIDiagnosticsEngine } from "@/lib/ai/diagnostics";
 import { AuthService } from "@/lib/security/auth";
+import { getFreshTelemetry, getHealthView } from "@/lib/metrics/view";
 
 // Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
 export const runtime = "nodejs";
@@ -36,7 +37,21 @@ export async function POST(request: Request) {
       );
     }
 
-    const report = AIDiagnosticsEngine.analyzeServer(server);
+    // Analyse REAL telemetry only: the latest fresh collected sample (same mapping as GET /api/servers). Metrics
+    // stored inside the server record (demo seed data) are ignored; with no fresh sample the engine takes its honest
+    // "no telemetry" path and is told why (health reason) instead of being given invented numbers.
+    const telemetry = getFreshTelemetry(server.id);
+    const { metrics: _storedMetrics, ...serverWithoutStoredMetrics } = server;
+    void _storedMetrics;
+    const analysed = telemetry ? { ...serverWithoutStoredMetrics, metrics: telemetry.metrics } : serverWithoutStoredMetrics;
+    const health = telemetry ? undefined : getHealthView(server.id);
+    const healthReason = telemetry
+      ? undefined
+      : (health?.reason ??
+        (health
+          ? `the last successful sample is ${health.sampleAgeSeconds ?? "unknown"}s old, which is too old to analyse; check that the metrics collector is running`
+          : "no metrics sample has been collected for this host yet; run the metrics collector (npm run collector) or refresh its metrics"));
+    const report = AIDiagnosticsEngine.analyzeServer(analysed, { healthReason });
     StorageService.saveDiagnostic(report);
 
     for (const proposal of report.proposals) {

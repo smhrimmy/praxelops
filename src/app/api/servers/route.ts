@@ -3,6 +3,7 @@ import { StorageService } from "@/lib/storage";
 import { AuthService } from "@/lib/security/auth";
 import { ServerHostSchema } from "@/types/server";
 import { toPublicServer } from "@/lib/servers/publicServer";
+import { withTelemetry } from "@/lib/metrics/view";
 
 // Uses node:sqlite (via the storage layer), which only exists on the Node.js runtime.
 export const runtime = "nodejs";
@@ -19,8 +20,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: "Rate limit exceeded" }, { status: 429 });
     }
 
-    // Never decrypts credentials: the listing only needs presence flags.
-    return NextResponse.json({ success: true, data: StorageService.getPublicServers() });
+    // Never decrypts credentials: the listing only needs presence flags. Real telemetry (the latest fresh sample)
+    // and the host health are overlaid from the metrics tables; stored/demo metrics are never returned.
+    return NextResponse.json({ success: true, data: withTelemetry(StorageService.getPublicServers()) });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: (error as Error).message },

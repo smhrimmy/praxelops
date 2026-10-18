@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { closeDb, DatabaseOpenError, getDb, getDbPath, withTransaction } from "../db/database";
-import { MIGRATIONS, runMigrations } from "../db/migrations";
+import { LATEST_VERSION, MIGRATIONS, runMigrations } from "../db/migrations";
 import { StorageService } from "../storage";
 import type { ServerHost } from "@/types/server";
 import {
@@ -317,8 +317,8 @@ describe("migration 2", () => {
   it("encrypts existing plaintext credentials in place; nothing plaintext remains in db + WAL", () => {
     withFreshDataDir((dir) => {
       seedSchemaV1(dir);
-      const db = getDb(); // opens + migrates to v2
-      expect(db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()?.v).toBe(2);
+      const db = getDb(); // opens + migrates to the latest version (v2 encrypts the credentials)
+      expect(db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()?.v).toBe(LATEST_VERSION);
 
       const row = (id: string) => db.prepare("SELECT password, private_key, passphrase FROM servers WHERE id = ?").get(id);
       expect(String(row("srv-p")?.password)).toMatch(/^enc:v1:/);
@@ -360,7 +360,7 @@ describe("migration 2", () => {
       closeDb();
       // Re-create a v1-shaped situation: roll the schema back one version and add a plaintext credential.
       const raw = new DatabaseSync(path.join(dir, "praxelops.db"));
-      raw.prepare("DELETE FROM schema_migrations WHERE version = 2").run();
+      raw.prepare("DELETE FROM schema_migrations WHERE version >= 2").run();
       raw.prepare("INSERT INTO servers (id, data, password) VALUES ('srv-late', '{}', 'late-plaintext')").run();
       raw.close();
       process.env.PRAXELOPS_SECRET = SECRET_B;

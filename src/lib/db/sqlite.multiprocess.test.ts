@@ -202,7 +202,7 @@ describe("SQLite real multi-process behaviour", () => {
           expect(count("diagnostics")).toBe(7);
           expect(count("proposals")).toBe(3);
           expect(count("meta")).toBe(1);
-          expect(count("schema_migrations")).toBe(2); // versions 1 and 2, each applied exactly once
+          expect(count("schema_migrations")).toBe(3); // versions 1, 2 and 3, each applied exactly once
         });
       });
     },

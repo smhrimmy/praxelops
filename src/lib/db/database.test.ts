@@ -21,9 +21,11 @@ const EXPECTED_TABLES = [
   "diagnostics",
   "known_hosts",
   "meta",
+  "metrics_samples",
   "operators",
   "proposals",
   "schema_migrations",
+  "server_health",
   "servers",
   "tickets",
 ];
