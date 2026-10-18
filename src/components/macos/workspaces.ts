@@ -1,5 +1,6 @@
 import {
   Server,
+  Activity,
   Terminal,
   FolderTree,
   Bot,
@@ -10,6 +11,7 @@ import {
 
 export type WorkspaceId =
   | "fleet"
+  | "monitor"
   | "terminal"
   | "sftp"
   | "ai-ops"
@@ -35,6 +37,7 @@ export const WORKSPACES: readonly Workspace[] = [
   { id: "ai-ops", label: "AI Copilot", shortLabel: "AI Copilot", icon: Bot, tint: "text-violet" },
   { id: "deployments", label: "Deployments", shortLabel: "Deploy", icon: Rocket, tint: "text-orange" },
   { id: "audit", label: "Security Audit", shortLabel: "Audit", icon: ShieldCheck, tint: "text-teal" },
+  { id: "monitor", label: "System Monitor", shortLabel: "Monitor", icon: Activity, tint: "text-teal" },
 ];
 
 export function workspaceLabel(id: string): string {

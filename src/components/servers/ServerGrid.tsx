@@ -6,6 +6,7 @@ import {
   Terminal,
   FolderTree,
   Bot,
+  Activity,
   HardDrive,
   Cpu,
   Layers,
@@ -14,14 +15,23 @@ import {
   Plus,
   AlertCircle,
   FlaskConical,
+  ShieldAlert,
 } from "lucide-react";
-import { ServerHost } from "@/types/server";
+import type { FleetServer } from "@/lib/fleet/types";
+import { deriveServerStatus, TONE_CLASSES } from "@/lib/fleet/health";
+import { formatDuration, formatLoad, formatPercent } from "@/lib/fleet/format";
+import { useNow } from "@/components/monitor/hooks";
+import { AgeLabel, Meter, StateBadge, StateDot } from "@/components/monitor/ui";
 
 interface ServerGridProps {
-  servers: ServerHost[];
-  onConnectSSH: (server: ServerHost) => void;
-  onOpenSFTP: (server: ServerHost) => void;
-  onDiagnose: (server: ServerHost) => void;
+  servers: FleetServer[];
+  /** Epoch ms of the last successful listing; ages count up from it between polls. */
+  fetchedAt: number;
+  /** Opens the Terminal workspace with a NEW tab for this server. */
+  onConnectSSH: (server: FleetServer) => void;
+  onOpenSFTP: (server: FleetServer) => void;
+  onDiagnose: (server: FleetServer) => void;
+  onOpenMonitor: (server: FleetServer) => void;
   onAddServer: () => void;
   onLoadDemoEnvironment?: () => void;
   onDeleteServer?: (serverId: string) => void;
@@ -29,15 +39,18 @@ interface ServerGridProps {
 
 export const ServerGrid: React.FC<ServerGridProps> = ({
   servers,
+  fetchedAt,
   onConnectSSH,
   onOpenSFTP,
   onDiagnose,
+  onOpenMonitor,
   onAddServer,
   onLoadDemoEnvironment,
   onDeleteServer,
 }) => {
   const [selectedTag, setSelectedTag] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const now = useNow(1000);
 
   const allTags = Array.from(
     new Set(servers.flatMap((s) => s.tags || []))
@@ -53,14 +66,6 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
     return matchesTag && matchesSearch;
   });
 
-  const formatUptime = (seconds?: number) => {
-    if (!seconds || seconds === 0) return "n/a";
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    if (days > 0) return `${days}d ${hours}h`;
-    return `${hours}h`;
-  };
-
   return (
     <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden p-3 sm:p-6 space-y-4 sm:space-y-5">
       {/* Top Controls: Header, Tag Filter & Search */}
@@ -73,7 +78,7 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
             </span>
           </h1>
           <p className="text-xs text-fg-muted mt-0.5">
-            SSH hosts you have registered. Open a terminal, browse files over SFTP, or run an AI diagnostic.
+            SSH hosts you have registered, with their real health. Open a terminal, watch live metrics, browse files over SFTP, or run an AI diagnostic.
           </p>
         </div>
 
@@ -140,7 +145,7 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                 No Infrastructure Nodes Registered
               </h2>
               <p className="text-xs text-fg-muted leading-relaxed">
-                Register a Linux or macOS host with its SSH credentials. Once added you can open an interactive SSH terminal, browse files over SFTP, and run AI diagnostics. Live CPU, memory and disk metrics are not collected yet.
+                Register a Linux or macOS host with its SSH credentials. Once added you can open an interactive SSH terminal, browse files over SFTP, and run AI diagnostics. After its host key is pinned, the background collector (npm run collector) samples CPU, memory, disk and network.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center gap-2 pt-2">
@@ -172,30 +177,24 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4 pb-6">
             {filteredServers.map((server) => {
-              const m = server.metrics;
-              const hasMetrics = m && m.reportedAt && !m.isStale;
+              const status = deriveServerStatus(server, fetchedAt, now);
+              const m = status.metrics;
               const isDemo = server.tags.includes("demo") || server.name.startsWith("[DEMO]");
+              const isAlert = status.info.tone === "alert";
 
               return (
                 <div
                   key={server.id}
-                  className="macos-card rounded-xl p-4 flex flex-col justify-between hover:border-line-strong transition-all duration-150 group"
+                  className={`macos-card rounded-xl p-4 flex flex-col justify-between hover:border-line-strong transition-all duration-150 group ${
+                    isAlert ? "border-danger! ring-1 ring-danger/50" : ""
+                  }`}
                 >
                   <div>
-                    {/* Header: Status + Name + IP */}
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-0.5 min-w-0 truncate pr-2">
+                    {/* Header: health state + Name + IP */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5 min-w-0 flex-1 pr-2">
                         <div className="flex items-center space-x-2">
-                          <span
-                            aria-hidden="true"
-                            className={`w-2 h-2 rounded-full shrink-0 ${
-                              server.status === "online"
-                                ? "bg-emerald-500"
-                                : server.status === "degraded"
-                                ? "bg-amber-500"
-                                : "bg-neutral-400"
-                            }`}
-                          />
+                          <StateDot state={status.state} />
                           <h3 className="text-sm font-semibold text-fg truncate">
                             {server.name}
                           </h3>
@@ -205,35 +204,29 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                         </div>
                       </div>
 
-                      <div className="flex items-center space-x-1 shrink-0">
-                        {onDeleteServer && (
-                          <button
-                            onClick={() => onDeleteServer(server.id)}
-                            title="Remove host"
-                            aria-label={`Remove host ${server.name}`}
-                            className="p-1.5 rounded sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-rose-500/10 text-fg-muted hover:text-danger transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {isDemo ? (
-                          <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-purple-500/10 text-violet border border-purple-500/20 font-bold">
-                            DEMO
-                          </span>
-                        ) : (
-                          <span
-                            className={`text-[10px] font-mono uppercase px-1.5 py-0.5 rounded ${
-                              server.status === "online"
-                                ? "bg-emerald-500/10 text-success border border-emerald-500/20"
-                                : server.status === "degraded"
-                                ? "bg-amber-500/10 text-warning border border-amber-500/20"
-                                : "bg-neutral-500/10 text-fg-2 border border-neutral-500/20"
-                            }`}
-                          >
-                            {server.status === "checking" ? "unchecked" : `last known: ${server.status}`}
-                          </span>
-                        )}
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <div className="flex items-center space-x-1">
+                          {onDeleteServer && (
+                            <button
+                              onClick={() => onDeleteServer(server.id)}
+                              title="Remove host"
+                              aria-label={`Remove host ${server.name}`}
+                              className="p-1.5 rounded sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-danger/10 text-fg-muted hover:text-danger transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {isDemo && (
+                            <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-violet/10 text-violet border border-violet/30 font-bold">
+                              DEMO
+                            </span>
+                          )}
+                        </div>
                       </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <StateBadge state={status.state} />
                     </div>
 
                     {/* Tags */}
@@ -250,124 +243,86 @@ export const ServerGrid: React.FC<ServerGridProps> = ({
                       </div>
                     )}
 
-                    {/* Metrics Gauges or Honest Unpolled State */}
-                    {hasMetrics ? (
-                      <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
-                        {/* CPU */}
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-fg-muted flex items-center space-x-1">
-                              <Cpu className="w-3 h-3" />
-                              <span>CPU</span>
-                            </span>
-                            <span className="font-mono font-medium text-fg">
-                              {m.cpuPercent.toFixed(1)}%
-                            </span>
-                          </div>
-                          <div className="w-full h-1.5 bg-track rounded-full overflow-hidden">
-                            <div
-                              className={`h-full transition-all duration-300 ${
-                                m.cpuPercent > 85
-                                  ? "bg-rose-500"
-                                  : m.cpuPercent > 60
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${Math.min(m.cpuPercent, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Memory */}
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-fg-muted flex items-center space-x-1">
-                              <Layers className="w-3 h-3" />
-                              <span>RAM</span>
-                            </span>
-                            <span className="font-mono font-medium text-fg">
-                              {m.memoryPercent.toFixed(1)}%
-                            </span>
-                          </div>
-                          <div className="w-full h-1.5 bg-track rounded-full overflow-hidden">
-                            <div
-                              className={`h-full transition-all duration-300 ${
-                                m.memoryPercent > 85
-                                  ? "bg-rose-500"
-                                  : m.memoryPercent > 60
-                                  ? "bg-amber-500"
-                                  : "bg-blue-500"
-                              }`}
-                              style={{ width: `${Math.min(m.memoryPercent, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        {/* Disk */}
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-fg-muted flex items-center space-x-1">
-                              <HardDrive className="w-3 h-3" />
-                              <span>Disk</span>
-                            </span>
-                            <span className="font-mono font-medium text-fg">
-                              {m.diskPercent.toFixed(0)}%
-                            </span>
-                          </div>
-                          <div className="w-full h-1.5 bg-track rounded-full overflow-hidden">
-                            <div
-                              className={`h-full transition-all duration-300 ${
-                                m.diskPercent > 85
-                                  ? "bg-rose-500"
-                                  : m.diskPercent > 60
-                                  ? "bg-amber-500"
-                                  : "bg-purple-500"
-                              }`}
-                              style={{ width: `${Math.min(m.diskPercent, 100)}%` }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mt-4 pt-3 border-t border-line flex items-center space-x-2 text-xs text-fg-muted bg-sunken p-2.5 rounded-lg">
-                        <AlertCircle className="w-4 h-4 shrink-0 text-warning" />
-                        <span>No metrics collected for this host (a metrics collector is not available yet).</span>
+                    {isAlert && (
+                      <div role="alert" className="mt-3 flex items-start gap-2 rounded-lg border border-danger bg-danger/10 p-2 text-[11px] text-danger">
+                        <ShieldAlert aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>Security alert: the host presented a different SSH key than the pinned one.</span>
                       </div>
                     )}
 
+                    {/* Real metrics, or the reason there are none */}
+                    {m ? (
+                      <div className="mt-4 pt-3 border-t border-line space-y-3">
+                        <div className="grid grid-cols-3 gap-2">
+                          <Meter label="CPU" icon={<Cpu className="w-3 h-3" aria-hidden="true" />} percent={m.cpuPercent} valueText={formatPercent(m.cpuPercent)} dim={status.lastKnown} />
+                          <Meter label="RAM" icon={<Layers className="w-3 h-3" aria-hidden="true" />} percent={m.memoryPercent} valueText={formatPercent(m.memoryPercent)} dim={status.lastKnown} />
+                          <Meter label="Disk" icon={<HardDrive className="w-3 h-3" aria-hidden="true" />} percent={m.diskPercent} valueText={formatPercent(m.diskPercent, 0)} dim={status.lastKnown} />
+                        </div>
+                        {status.lastKnown && (
+                          <p className="text-[11px] text-fg-2">
+                            <span className={`font-semibold ${TONE_CLASSES[status.info.tone].text}`}>{status.info.label}.</span> {status.note}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      !isAlert && (
+                        <div className="mt-4 pt-3 border-t border-line">
+                          <div className="flex items-start space-x-2 text-xs text-fg-2 bg-sunken p-2.5 rounded-lg">
+                            <AlertCircle aria-hidden="true" className={`w-4 h-4 shrink-0 ${TONE_CLASSES[status.info.tone].text}`} />
+                            <span>{status.note}</span>
+                          </div>
+                        </div>
+                      )
+                    )}
+
                     {/* Metadata Footer */}
-                    <div className="flex items-center justify-between text-[10px] text-fg-muted mt-3 font-mono">
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-fg-muted mt-3 font-mono">
                       <span className="flex items-center space-x-1">
-                        <Clock className="w-2.5 h-2.5" />
-                        <span>Uptime {formatUptime(m?.uptimeSeconds)}</span>
+                        <Clock className="w-2.5 h-2.5" aria-hidden="true" />
+                        <span>
+                          Up {m ? formatDuration(m.uptimeSeconds) : "—"} · Load {m ? formatLoad(m.loadAverage[0]) : "—"}
+                        </span>
                       </span>
-                      <span>{server.osVersion || "Linux"}</span>
+                      <span className="truncate">{server.osVersion || "Linux"}</span>
+                    </div>
+                    <div className="mt-1">
+                      <AgeLabel prefix={m && !status.lastKnown ? "updated" : "last sample"} seconds={status.sampleAgeSeconds} stale={status.stale} />
                     </div>
                   </div>
 
                   {/* Actions Bar */}
-                  <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
+                  <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-line">
                     <button
                       onClick={() => onConnectSSH(server)}
-                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 text-success text-xs font-medium transition"
+                      aria-label={`Open terminal for ${server.name}`}
+                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-success/10 hover:bg-success/20 text-success text-xs font-medium transition"
                     >
-                      <Terminal className="w-3 h-3" />
-                      <span>SSH</span>
+                      <Terminal className="w-3 h-3" aria-hidden="true" />
+                      <span>Open terminal</span>
+                    </button>
+
+                    <button
+                      onClick={() => onOpenMonitor(server)}
+                      aria-label={`Open System Monitor for ${server.name}`}
+                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-info/10 hover:bg-info/20 text-info text-xs font-medium transition"
+                    >
+                      <Activity className="w-3 h-3" aria-hidden="true" />
+                      <span>Monitor</span>
                     </button>
 
                     <button
                       onClick={() => onOpenSFTP(server)}
-                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 text-info text-xs font-medium transition"
+                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-sunken hover:bg-hover-strong text-fg-2 text-xs font-medium transition"
                     >
-                      <FolderTree className="w-3 h-3" />
+                      <FolderTree className="w-3 h-3" aria-hidden="true" />
                       <span>SFTP</span>
                     </button>
 
                     <button
                       onClick={() => onDiagnose(server)}
-                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-purple-600/10 hover:bg-purple-600/20 text-violet text-xs font-medium transition"
+                      className="flex items-center justify-center space-x-1 px-2 py-1.5 rounded-lg bg-violet/10 hover:bg-violet/20 text-violet text-xs font-medium transition"
                     >
-                      <Bot className="w-3 h-3" />
+                      <Bot className="w-3 h-3" aria-hidden="true" />
                       <span>AI Fix</span>
                     </button>
                   </div>

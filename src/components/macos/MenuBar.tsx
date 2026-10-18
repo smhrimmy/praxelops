@@ -4,6 +4,10 @@ import React, { useState, useEffect, useRef } from "react";
 import { Terminal, Sun, Moon, Search, LogOut, Server, Clock, MoreHorizontal } from "lucide-react";
 import { WORKSPACES } from "./workspaces";
 import { useModKeyLabel } from "./platform";
+import { FleetStatus, FleetStatusList } from "./FleetStatus";
+import { orderEntries } from "@/lib/fleet/status";
+import { summarizeFleet } from "@/lib/fleet/health";
+import type { FleetServer } from "@/lib/fleet/types";
 
 interface MenuBarProps {
   onOpenCommandPalette: () => void;
@@ -11,8 +15,14 @@ interface MenuBarProps {
   onSelectView: (view: string) => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
-  /** Number of hosts in the inventory. Reachability is not monitored, so no online/offline count is shown. */
-  totalServers: number;
+  /** Inventory with real health data; drives the per-server status indicator. */
+  servers: FleetServer[];
+  /** Epoch ms of the last successful server listing (0 = not loaded yet). */
+  fleetFetchedAt: number;
+  /** Open the System Monitor on one server's detail page. */
+  onOpenMonitorServer: (serverId: string) => void;
+  /** Open the System Monitor overview. */
+  onOpenMonitor: () => void;
   onLogout: () => void;
 }
 
@@ -22,7 +32,10 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onSelectView,
   theme,
   onToggleTheme,
-  totalServers,
+  servers,
+  fleetFetchedAt,
+  onOpenMonitorServer,
+  onOpenMonitor,
   onLogout,
 }) => {
   const [time, setTime] = useState<string>("");
@@ -68,7 +81,12 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     };
   }, [moreOpen]);
 
-  const hostLabel = `${totalServers} ${totalServers === 1 ? "host" : "hosts"}`;
+  const summary = summarizeFleet(servers);
+  const hostLabel = `${summary.total} ${summary.total === 1 ? "host" : "hosts"}`;
+  const overflowSummary =
+    summary.total === 0
+      ? "No hosts registered"
+      : `${hostLabel}: ${summary.reachable} reachable, ${summary.attention} need attention`;
   const iconBtn =
     "p-1.5 rounded-md hover:bg-hover text-fg-2 hover:text-fg transition-colors shrink-0";
 
@@ -102,14 +120,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
 
       {/* Right: Status Indicators & Quick Actions */}
       <div className="flex items-center gap-1 sm:gap-2 text-fg-2 min-w-0">
-        {/* Inventory size. Status is not live-monitored, so this is a count, not a health claim. */}
-        <div
-          title={`${hostLabel} registered. Reachability is not monitored.`}
-          className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sunken text-fg-2 border border-line"
-        >
-          <Server aria-hidden="true" className="w-3 h-3" />
-          <span className="font-semibold text-[11px]">{hostLabel}</span>
-        </div>
+        {/* Per-server health: one dot per host (colour + shape), popover with the full list (sm and up). */}
+        <FleetStatus servers={servers} fetchedAt={fleetFetchedAt} onOpenServer={onOpenMonitorServer} onOpenOverview={onOpenMonitor} />
 
         {/* Global Search / Command Palette shortcut */}
         <button
@@ -178,8 +190,18 @@ export const MenuBar: React.FC<MenuBarProps> = ({
             >
               <div role="presentation" className="px-3 py-1.5 flex items-center gap-2 text-fg-muted">
                 <Server aria-hidden="true" className="w-3.5 h-3.5" />
-                <span>{hostLabel} registered</span>
+                <span>{overflowSummary}</span>
               </div>
+              {servers.length > 0 && (
+                <FleetStatusList
+                  variant="menu"
+                  entries={orderEntries(servers, fleetFetchedAt, Date.now())}
+                  onSelect={(id) => {
+                    setMoreOpen(false);
+                    onOpenMonitorServer(id);
+                  }}
+                />
+              )}
               <div role="presentation" className="px-3 py-1.5 flex items-center gap-2 text-fg-muted">
                 <Clock aria-hidden="true" className="w-3.5 h-3.5" />
                 <span className="font-mono text-[11px]">{time}</span>

@@ -16,7 +16,10 @@ import { AIDiagnosticsView } from "@/components/ai/AIDiagnosticsView";
 import { DeploymentsView } from "@/components/deployments/DeploymentsView";
 import { AuditView } from "@/components/audit/AuditView";
 import { LoginScreen } from "@/components/auth/LoginScreen";
-import { ServerHost } from "@/types/server";
+import { SystemMonitorView } from "@/components/monitor/SystemMonitorView";
+import { useFleetData } from "@/components/monitor/hooks";
+import type { TerminalOpenRequest } from "@/components/terminal/TerminalView";
+import type { FleetServer } from "@/lib/fleet/types";
 import { apiFetch, fetchSession, logout, UNAUTHORIZED_EVENT } from "@/lib/client/api";
 
 const THEME_KEY = "praxelops-theme";
@@ -45,9 +48,16 @@ function isEditableTarget(el: HTMLElement | null): boolean {
 }
 
 function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
-  const [servers, setServers] = useState<ServerHost[]>([]);
-  const [selectedServer, setSelectedServer] = useState<ServerHost | undefined>(undefined);
+  // Server listing with real health/telemetry, polled every 15s (paused while the tab is hidden).
+  const fleet = useFleetData();
+  const { servers, setServers } = fleet;
+  const [selectedServer, setSelectedServer] = useState<FleetServer | undefined>(undefined);
   const [activeView, setActiveView] = useState<WorkspaceId>("fleet");
+  // System Monitor: which server's detail page is open (null = overview).
+  const [monitorServerId, setMonitorServerId] = useState<string | null>(null);
+  // Terminal: the view stays mounted once visited (sessions survive navigation); a request opens a new tab.
+  const [terminalMounted, setTerminalMounted] = useState<boolean>(false);
+  const [terminalRequest, setTerminalRequest] = useState<TerminalOpenRequest | null>(null);
   // This component only mounts on the client after the session check, so reading the DOM/localStorage here is safe.
   const [theme, setTheme] = useState<"dark" | "light">(() =>
     typeof document !== "undefined" && document.documentElement.getAttribute("data-theme") === "light"
@@ -64,21 +74,23 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
   const isNarrow = useMediaQuery("(max-width: 899px)");
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
 
-  // Load server list
-  const loadServers = async () => {
-    try {
-      const res = await apiFetch("/api/servers");
-      const data = await res.json();
-      if (data.success && data.data) {
-        setServers(data.data);
-        if (!selectedServer && data.data.length > 0) {
-          setSelectedServer(data.data[0]);
-        }
-      }
-    } catch {
-      // Keep state
-    }
-  };
+  // Default selection once the first listing arrives.
+  useEffect(() => {
+    if (!selectedServer && servers.length > 0) setSelectedServer(servers[0]);
+  }, [selectedServer, servers]);
+
+  const openTerminalFor = useCallback((srv: FleetServer) => {
+    setSelectedServer(srv);
+    setTerminalRequest((prev) => ({ serverId: srv.id, nonce: (prev?.nonce ?? 0) + 1 }));
+    setActiveView("terminal");
+    setDrawerOpen(false);
+  }, []);
+
+  const openMonitorFor = useCallback((serverId: string | null) => {
+    setMonitorServerId(serverId);
+    setActiveView("monitor");
+    setDrawerOpen(false);
+  }, []);
 
   const handleLoadDemo = async () => {
     try {
@@ -111,11 +123,6 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
       setServers(next);
     }
   };
-
-  useEffect(() => {
-    loadServers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Theme: persisted choice; follows the OS only while there is no stored choice.
   const toggleTheme = () => {
@@ -160,13 +167,17 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
     if (!isNarrow) setDrawerOpen(false);
   }, [isNarrow]);
 
+  useEffect(() => {
+    if (activeView === "terminal") setTerminalMounted(true);
+  }, [activeView]);
+
   // xterm fits to its container on window resize only, so nudge it after layout changes settle.
   useEffect(() => {
     const t = window.setTimeout(() => window.dispatchEvent(new Event("resize")), 260);
     return () => window.clearTimeout(t);
   }, [sidebarCollapsed, isMaximized, isNarrow]);
 
-  // Keyboard: Cmd/Ctrl+K palette, +B sidebar, +1..6 workspaces.
+  // Keyboard: Cmd/Ctrl+K palette, +B sidebar, +1..N workspaces (N = WORKSPACES.length).
   const modalOpen = isCommandPaletteOpen || isAddServerOpen;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -227,7 +238,10 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
         onSelectView={(v) => setActiveView(v as WorkspaceId)}
         theme={theme}
         onToggleTheme={toggleTheme}
-        totalServers={servers.length}
+        servers={servers}
+        fleetFetchedAt={fleet.fetchedAt}
+        onOpenMonitorServer={(id) => openMonitorFor(id)}
+        onOpenMonitor={() => openMonitorFor(null)}
         onLogout={onLogout}
       />
 
@@ -304,10 +318,8 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
               {activeView === "fleet" && (
                 <ServerGrid
                   servers={servers}
-                  onConnectSSH={(srv) => {
-                    setSelectedServer(srv);
-                    setActiveView("terminal");
-                  }}
+                  fetchedAt={fleet.fetchedAt}
+                  onConnectSSH={openTerminalFor}
                   onOpenSFTP={(srv) => {
                     setSelectedServer(srv);
                     setActiveView("sftp");
@@ -316,18 +328,38 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
                     setSelectedServer(srv);
                     setActiveView("ai-ops");
                   }}
+                  onOpenMonitor={(srv) => openMonitorFor(srv.id)}
                   onAddServer={() => setIsAddServerOpen(true)}
                   onLoadDemoEnvironment={handleLoadDemo}
                   onDeleteServer={handleDeleteServer}
                 />
               )}
 
-              {activeView === "terminal" && (
-                <TerminalView
+              {activeView === "monitor" && (
+                <SystemMonitorView
                   servers={servers}
-                  selectedServer={selectedServer}
-                  onAddServerClick={() => setIsAddServerOpen(true)}
+                  rates={fleet.rates}
+                  fetchedAt={fleet.fetchedAt}
+                  loaded={fleet.loaded}
+                  loadError={fleet.error}
+                  selectedId={monitorServerId}
+                  onSelect={setMonitorServerId}
+                  onOpenTerminal={openTerminalFor}
+                  onAddServer={() => setIsAddServerOpen(true)}
+                  onFleetReload={fleet.reload}
                 />
+              )}
+
+              {terminalMounted && (
+                <div className={activeView === "terminal" ? "flex-1 min-h-0 min-w-0 flex flex-col" : "hidden"}>
+                  <TerminalView
+                    servers={servers}
+                    selectedServer={selectedServer}
+                    active={activeView === "terminal"}
+                    openRequest={terminalRequest}
+                    onAddServerClick={() => setIsAddServerOpen(true)}
+                  />
+                </div>
               )}
 
               {activeView === "sftp" && (
@@ -368,14 +400,12 @@ function PraxelOpsWorkspace({ onLogout }: { onLogout: () => void }) {
           setSelectedServer(srv);
           setActiveView("fleet");
         }}
-        onConnectSSH={(srv) => {
-          setSelectedServer(srv);
-          setActiveView("terminal");
-        }}
+        onConnectSSH={openTerminalFor}
         onOpenSFTP={(srv) => {
           setSelectedServer(srv);
           setActiveView("sftp");
         }}
+        onOpenMonitor={(srv) => openMonitorFor(srv.id)}
         onSelectView={(view) => setActiveView(view as WorkspaceId)}
         onAddServer={() => setIsAddServerOpen(true)}
         theme={theme}

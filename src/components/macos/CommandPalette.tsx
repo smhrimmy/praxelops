@@ -9,6 +9,7 @@ import {
   Moon,
   Plus,
   PanelLeft,
+  Activity,
   X,
 } from "lucide-react";
 import { ServerHost } from "@/types/server";
@@ -21,6 +22,7 @@ interface CommandPaletteProps {
   onSelectServer: (server: ServerHost) => void;
   onConnectSSH: (server: ServerHost) => void;
   onOpenSFTP: (server: ServerHost) => void;
+  onOpenMonitor: (server: ServerHost) => void;
   onSelectView: (view: string) => void;
   onAddServer: () => void;
   theme: "dark" | "light";
@@ -35,6 +37,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onSelectServer,
   onConnectSSH,
   onOpenSFTP,
+  onOpenMonitor,
   onSelectView,
   onAddServer,
   theme,
@@ -111,6 +114,17 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       category: "Servers",
       action: () => {
         onConnectSSH(s);
+        onClose();
+      },
+    },
+    {
+      id: `srv-mon-${s.id}`,
+      title: `System Monitor: ${s.name}`,
+      subtitle: "Live CPU, memory, disk, processes and services",
+      icon: Activity,
+      category: "Servers",
+      action: () => {
+        onOpenMonitor(s);
         onClose();
       },
     },

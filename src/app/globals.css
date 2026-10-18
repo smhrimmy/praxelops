@@ -9,10 +9,13 @@
 
 /* ------------------------------------------------------------------ */
 /* Design tokens. Dark is the default; [data-theme="light"] overrides.  */
+/* [data-theme="dark"] on a subtree (the always-dark terminal) re-applies */
+/* the dark tokens there even when the page itself is light.            */
 /* Contrast targets (WCAG AA): fg/fg-2/fg-muted >= 4.5:1 on bg, surface, */
 /* sunken; line-strong (control borders) >= 3:1.                        */
 /* ------------------------------------------------------------------ */
-:root {
+:root,
+[data-theme="dark"] {
   color-scheme: dark;
 
   --bg: #0f1015;
